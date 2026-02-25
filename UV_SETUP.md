@@ -77,7 +77,3 @@ uv build
 ```
 
 This creates a wheel and source distribution in the `dist/` directory.
-
-
-
-

@@ -56,6 +56,22 @@ A interface Streamlit permite:
 - Descartar cartas
 - Ver log do jogo e status dos outros jogadores
 
+## Deploy on the internet (Streamlit Community Cloud)
+
+You don’t need a “Deploy” button in the app. Deploy from the Streamlit site:
+
+1. **Push this repo to GitHub** (if it isn’t already).
+2. Open **[share.streamlit.io](https://share.streamlit.io)** and sign in with GitHub.
+3. Click **“Create app”** (top right).
+4. Choose **“Yup, I have an app”** and set:
+   - **Repository**: `your-username/canastra` (or your fork).
+   - **Branch**: `main` (or your default branch).
+   - **Main file path**: `app.py`
+5. (Optional) In **Advanced settings** you can set Python version (e.g. 3.12) and secrets.
+6. Click **Deploy**. The app will get a URL like `https://something.streamlit.app`.
+
+The project includes `requirements.txt` so Community Cloud can install dependencies. If you add packages in `pyproject.toml`, add them to `requirements.txt` too for deployment.
+
 ## Estrutura do Projeto
 
 ```
@@ -66,5 +82,6 @@ canastra/
 ├── engine.py                # Engine do jogo
 ├── app.py                   # Interface Streamlit
 ├── main.py                  # Ponto de entrada
+├── requirements.txt         # Dependências para deploy
 └── README.md                # Este arquivo
 ```
