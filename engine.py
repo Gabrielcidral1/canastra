@@ -2,9 +2,8 @@
 
 import random
 from enum import Enum
-from typing import Optional
 
-from card import Card, Rank, Suit
+from card import Card, Suit, create_canastra_deck
 from game import Game, GameType
 
 
@@ -74,7 +73,7 @@ class Engine:
         self.turn_phase = TurnPhase.DRAW
         self.game_over = False
         self.messages: list[str] = []
-        self.pending_morto_player_index: Optional[int] = (
+        self.pending_morto_player_index: int | None = (
             None  # receives morto at start of next turn (after indirect knock)
         )
 
@@ -125,16 +124,7 @@ class Engine:
 
     def create_deck(self) -> list[Card]:
         """Create standard Canastra deck."""
-        deck = []
-        for _ in range(4):
-            deck.append(Card(Rank.JOKER))
-        ranks = [r for r in Rank if r != Rank.JOKER]
-        suits = [Suit.CLUBS, Suit.DIAMONDS, Suit.HEARTS, Suit.SPADES]
-        for _ in range(2):
-            for rank in ranks:
-                for suit in suits:
-                    deck.append(Card(rank, suit))
-        return deck
+        return create_canastra_deck()
 
     def start_new_game(self):
         """Start a new game - deal cards and determine starting player."""
@@ -175,7 +165,7 @@ class Engine:
         """Get the current player."""
         return self.players[self.current_player_index]
 
-    def draw_from_stock(self) -> Optional[str]:
+    def draw_from_stock(self) -> str | None:
         """Draw a card from stock. Returns error message if invalid."""
         if self.turn_phase != TurnPhase.DRAW:
             return "Só é possível comprar na fase de compra"
@@ -193,7 +183,7 @@ class Engine:
         self._log(f"{display_name} comprou do monte")
         return None
 
-    def draw_from_discard(self) -> Optional[str]:
+    def draw_from_discard(self) -> str | None:
         """Draw all cards from discard pile. Returns error message if invalid."""
         if self.turn_phase != TurnPhase.DRAW:
             return "Só é possível comprar na fase de compra"
@@ -211,7 +201,7 @@ class Engine:
         self._log(f"{display_name} comprou do lixo")
         return None
 
-    def lay_down_sequence(self, suit: Suit, cards: list[Card]) -> Optional[str]:
+    def lay_down_sequence(self, suit: Suit, cards: list[Card]) -> str | None:
         """Lay down a sequence. Returns error message if invalid."""
         if self.turn_phase != TurnPhase.LAY_DOWN:
             return "Só é possível baixar jogos na fase de baixar"
@@ -236,7 +226,7 @@ class Engine:
                 player.add_card(card)
             return str(e)
 
-    def lay_down_triple(self, cards: list[Card]) -> Optional[str]:
+    def lay_down_triple(self, cards: list[Card]) -> str | None:
         """Lay down a triple. Returns error message if invalid."""
         if self.turn_phase != TurnPhase.LAY_DOWN:
             return "Só é possível baixar jogos na fase de baixar"
@@ -259,8 +249,8 @@ class Engine:
             return str(e)
 
     def add_to_game(
-        self, game_index: int, card: Card, target_player: Optional[Player] = None
-    ) -> Optional[str]:
+        self, game_index: int, card: Card, target_player: Player | None = None
+    ) -> str | None:
         """Add card to an existing game. Returns error message if invalid."""
         if self.turn_phase != TurnPhase.LAY_DOWN:
             return "Só é possível adicionar cartas na fase de baixar"
@@ -295,7 +285,7 @@ class Engine:
             player.add_card(card)
             return str(e)
 
-    def discard(self, card: Card) -> Optional[str]:
+    def discard(self, card: Card) -> str | None:
         """Discard a card. Returns error message if invalid."""
         if self.turn_phase != TurnPhase.DISCARD:
             return "Só é possível descartar na fase de descartar"
@@ -311,9 +301,9 @@ class Engine:
 
         if len(player.hand) == 0:
             knock_type = self._determine_knock_type(player)
-            # Picking up the morto (first time emptying hand) requires no meld condition.
-            # Only ending the game (final knock, or direct when already had morto) requires
-            # the team to have a clean canastra.
+            # Picking up the morto (first time emptying hand) requires no meld.
+            # Only ending the game (final knock, or direct when already had morto)
+            # requires the team to have a clean canastra.
             would_end_game = knock_type == KnockType.FINAL or (
                 knock_type == KnockType.DIRECT and player.has_dead_hand
             )
@@ -331,7 +321,8 @@ class Engine:
         return None
 
     def get_team_live_points(self, team: int) -> int:
-        """Current points for a team: sum(jogos) - sum(mão) for all players on that team."""
+        """Current points for a team: sum(jogos) - sum(mão)
+        for all players on that team."""
         total_games = 0
         total_hand = 0
         for p in self.players:
@@ -478,14 +469,15 @@ class Engine:
         eng.messages = []
         return eng
 
-    def get_winner_message(self) -> tuple[Optional[int], dict[int, int]]:
+    def get_winner_message(self) -> tuple[int | None, dict[int, int]]:
         """Return (winning_team or None if tie, {team: points}). Only valid when
         game_over and _calculate_final_points has been called."""
         team_scores: dict[int, int] = {}
         for p in self.players:
             team_scores[p.team] = p.points
         if len(team_scores) < 2:
-            return (list(team_scores.keys())[0] if team_scores else None, team_scores)
+            sole = list(team_scores.keys())[0] if team_scores else None
+            return (sole, team_scores)
         scores = list(team_scores.values())
         if scores[0] == scores[1]:
             return (None, team_scores)

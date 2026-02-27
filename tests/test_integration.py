@@ -366,7 +366,8 @@ class TestAddingToGames:
         assert len(player.games[0].cards) == 4
 
     def test_add_card_to_sequence_with_2_of_suit_filling_gap(self):
-        """Adding the natural card that the 2 of suit stands for (e.g. 6 to 5,2,7) must be allowed."""
+        """Adding the natural card that the 2 of suit stands for
+        (e.g. 6 to 5,2,7) must be allowed."""
         engine = Engine(num_players=4)
         engine.start_new_game()
         player = engine.get_current_player()
@@ -964,7 +965,8 @@ class TestPointCalculation:
         for c in seq_cards:
             player0.add_card(c)
         engine.lay_down_sequence(Suit.HEARTS, seq_cards)
-        # Team 0 has one game worth 30 (3 cards * 10). Hands: partner has 11 cards (unknown value), player0 has rest
+        # Team 0 has one game worth 30 (3 cards * 10).
+        # Hands: partner has 11 cards (unknown), player0 has rest
         live_0 = engine.get_team_live_points(0)
         live_1 = engine.get_team_live_points(1)
         assert isinstance(live_0, int)
@@ -1106,7 +1108,8 @@ class TestCompleteGameFlow:
 
 
 class TestAIISMCTS:
-    """Tests for IS-MCTS AI: legal actions, apply action, determinization, play_ai_turn."""
+    """Tests for IS-MCTS AI: legal actions, apply action,
+    determinization, play_ai_turn."""
 
     def test_discard_danger_joker_rates_higher(self):
         """Discarding a joker has higher danger than discarding a non-joker."""
@@ -1121,48 +1124,78 @@ class TestAIISMCTS:
         assert danger_low == 0.0
 
     def test_discard_danger_matching_pile_top(self):
-        """Discarding a card that matches the pile top is rated more dangerous than a non-match."""
+        """Discarding a card that matches the pile top is rated
+        more dangerous than a non-match."""
         engine = Engine(num_players=4)
         engine.start_new_game()
         engine.current_player_index = 0
         engine.turn_phase = TurnPhase.DISCARD
-        engine.players[0].hand = [Card(Rank.FOUR, Suit.DIAMONDS), Card(Rank.SEVEN, Suit.HEARTS)]
+        engine.players[0].hand = [
+            Card(Rank.FOUR, Suit.DIAMONDS),
+            Card(Rank.SEVEN, Suit.HEARTS),
+        ]
         engine.discard_pile.append(Card(Rank.FOUR, Suit.CLUBS))
-        danger_match = _discard_danger(engine, ("discard", 0))  # discard 4♦, pile top 4♣
+        # discard 4♦, pile top 4♣
+        danger_match = _discard_danger(engine, ("discard", 0))
         danger_safe = _discard_danger(engine, ("discard", 1))   # discard 7♥
         assert danger_match >= 0.5 and danger_safe == 0.0
 
     def test_discard_danger_addable_card_high_danger(self):
-        """Discarding a card we can add to our team's meld is rated dangerous (avoid 5♣ blunder)."""
+        """Discarding a card we can add to our team's meld is rated dangerous
+        (avoid 5♣ blunder)."""
         from game import Game, GameType
 
         engine = Engine(num_players=4)
         engine.start_new_game()
         engine.current_player_index = 0
         engine.turn_phase = TurnPhase.DISCARD
-        # We have 5♣ in hand; our team has a sequence 6♣-7♣-8♣ that can take 5♣ at the low end
-        seq = [Card(Rank.SIX, Suit.CLUBS), Card(Rank.SEVEN, Suit.CLUBS), Card(Rank.EIGHT, Suit.CLUBS)]
-        engine.players[0].games.append(Game(GameType.SEQUENCE, list(seq), Suit.CLUBS))
-        engine.players[0].hand = [Card(Rank.FIVE, Suit.CLUBS), Card(Rank.KING, Suit.SPADES)]
+        # We have 5♣ in hand; our team has sequence 6♣-7♣-8♣ (can take 5♣)
+        seq = [
+            Card(Rank.SIX, Suit.CLUBS),
+            Card(Rank.SEVEN, Suit.CLUBS),
+            Card(Rank.EIGHT, Suit.CLUBS),
+        ]
+        engine.players[0].games.append(
+            Game(GameType.SEQUENCE, list(seq), Suit.CLUBS),
+        )
+        engine.players[0].hand = [
+            Card(Rank.FIVE, Suit.CLUBS),
+            Card(Rank.KING, Suit.SPADES),
+        ]
         danger_discard_addable = _discard_danger(engine, ("discard", 0))
         danger_discard_other = _discard_danger(engine, ("discard", 1))
         assert danger_discard_addable >= 0.9
         assert danger_discard_other == 0.0
 
     def test_early_trinca_penalty(self):
-        """Laying a triple in early game gets a penalty; with wildcards the penalty is higher."""
+        """Laying a triple in early game gets a penalty; with wildcards
+        the penalty is higher."""
         engine = Engine(num_players=4)
         engine.start_new_game()
         engine.current_player_index = 0
         engine.turn_phase = TurnPhase.LAY_DOWN
-        while len(engine.stock) <= 40:
+        while len(engine.stock) <= 50:
             engine.stock.append(Card(Rank.ACE, Suit.CLUBS))
         assert _is_early_game(engine)
         # Early triple with joker
-        action_wild = ("lay_triple", [(Rank.ACE, Suit.CLUBS), (Rank.ACE, Suit.DIAMONDS), (Rank.JOKER, Suit.JOKER)])
+        action_wild = (
+            "lay_triple",
+            [
+                (Rank.ACE, Suit.CLUBS),
+                (Rank.ACE, Suit.DIAMONDS),
+                (Rank.JOKER, Suit.JOKER),
+            ],
+        )
         assert _early_trinca_penalty(engine, action_wild) == 50.0
         # Early triple without wildcards
-        action_natural = ("lay_triple", [(Rank.ACE, Suit.CLUBS), (Rank.ACE, Suit.DIAMONDS), (Rank.ACE, Suit.HEARTS)])
+        action_natural = (
+            "lay_triple",
+            [
+                (Rank.ACE, Suit.CLUBS),
+                (Rank.ACE, Suit.DIAMONDS),
+                (Rank.ACE, Suit.HEARTS),
+            ],
+        )
         assert _early_trinca_penalty(engine, action_natural) == 25.0
         # Non-triple action
         assert _early_trinca_penalty(engine, ("discard", 0)) == 0.0
@@ -1286,7 +1319,8 @@ class TestAIISMCTS:
         assert len(engine.discard_pile) == discard_size_before + 1
 
     def test_play_ai_turn_no_legal_actions_ends_game(self):
-        """When no legal actions (empty stock and discard), play_ai_turn ends the game."""
+        """When no legal actions (empty stock and discard),
+        play_ai_turn ends the game."""
         engine = Engine(num_players=4)
         engine.start_new_game()
         engine.current_player_index = 1
@@ -1301,7 +1335,8 @@ class TestAIISMCTS:
 
     @mock.patch("game_helpers.ISMCTS_COUNTERFACTUAL_ROLLOUTS", 2)
     def test_get_counterfactual_action_on_human_turn_returns_suggestion(self):
-        """When it's the human's turn, get_counterfactual_action returns an action and description."""
+        """When it's the human's turn, get_counterfactual_action
+        returns an action and description."""
         engine = Engine(num_players=4)
         engine.start_new_game()
         engine.current_player_index = 0
@@ -1322,7 +1357,8 @@ class TestAIISMCTS:
         assert desc == ""
 
     def test_play_ai_turn_completes_quickly(self):
-        """IS-MCTS AI turn (abstraction + progressive widening + fast rollout) finishes in under 2s."""
+        """IS-MCTS AI turn (abstraction + progressive widening + fast rollout)
+        finishes in under 2s."""
         engine = Engine(num_players=4)
         engine.start_new_game()
         engine.current_player_index = 1
@@ -1339,8 +1375,9 @@ class TestAIISMCTS:
     @mock.patch("game_helpers.ISMCTS_COUNTERFACTUAL_ROLLOUTS", 8)
     @mock.patch("game_helpers.COUNTERFACTUAL_ROLLOUT_MAX_STEPS", 6)
     def test_counterfactual_suggestion_takes_longer_but_still_reasonable(self):
-        """Sugestão do bot (stronger MCTS) with more rollouts completes within a reasonable time.
-        With patched rollouts, suggestion does more work than in-game AI and stays under 2s."""
+        """Sugestão do bot (stronger MCTS) with more rollouts completes
+        within a reasonable time. With patched rollouts, suggestion does
+        more work than in-game AI and stays under 2s."""
         engine_cf = Engine(num_players=4)
         engine_cf.start_new_game()
         engine_cf.current_player_index = 0
@@ -1354,5 +1391,6 @@ class TestAIISMCTS:
 
         assert action is not None and desc != ""
         assert cf_elapsed < 2.0, (
-            f"Sugestão do bot took {cf_elapsed:.2f}s (expected < 2s with patched rollouts)"
+            f"Sugestão do bot took {cf_elapsed:.2f}s "
+            "(expected < 2s with patched rollouts)"
         )

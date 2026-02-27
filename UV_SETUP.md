@@ -1,6 +1,6 @@
 # UV Setup Guide
 
-This project is configured to work with [uv](https://github.com/astral-sh/uv), a fast Python package installer and resolver.
+This project is configured to work with [uv](https://github.com/astral-sh/uv).
 
 ## Quick Start
 
@@ -10,20 +10,26 @@ This project is configured to work with [uv](https://github.com/astral-sh/uv), a
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Or on Windows (PowerShell):
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
 ### 2. Install the package
 
-```bash
-# Install in development/editable mode
-uv pip install -e .
+**Option A – Use uv’s project venv (`.venv`)**
 
-# Or install globally
-uv pip install .
+```bash
+uv sync
+source .venv/bin/activate   # Linux/Mac
+# Then in your IDE, select the interpreter: .venv/bin/python
 ```
+
+**Option B – Use an existing venv (e.g. one named `canastra`)**
+
+Activate that venv, then install the project and all dependencies (including Streamlit) into it:
+
+```bash
+# With (canastra) or your venv already activated:
+uv pip install -e .
+```
+
+This installs `streamlit` and everything from `pyproject.toml` into the active environment.
 
 ### 3. Run the CLI
 
@@ -66,7 +72,7 @@ The project uses a flat structure where all Python files are in the root directo
 
 ## Dependencies
 
-This project has **no external dependencies** - it uses only Python standard library.
+This project depends on **streamlit** (see `pyproject.toml`). Use **Option B** above if you rely on an existing venv so that `uv pip install -e .` installs Streamlit into it; otherwise use **Option A** and the project’s `.venv`.
 
 ## Building
 

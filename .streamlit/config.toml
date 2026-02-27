@@ -1,0 +1,3 @@
+[theme]
+# Default theme for everyone who opens the app (dark mode).
+base = "dark"

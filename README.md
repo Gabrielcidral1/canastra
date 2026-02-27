@@ -1,87 +1,152 @@
-# Canastra Brasileiro
+# Brazilian Canastra
 
-Jogo de Canastra brasileiro implementado em Python com interface Streamlit.
+A Brazilian Canastra card game implemented in Python with a Streamlit interface.
 
-## Como Executar
+## How to run
 
 ```bash
 python main.py
 ```
 
-Ou diretamente com Streamlit:
+Or run Streamlit directly:
 
 ```bash
 streamlit run app.py
 ```
 
-## Regras do Jogo
+---
 
-### Definições
+## Game rules
 
-- **JOGOS**: Formados por 3 ou mais cartas do mesmo naipe em sequência (o Ás pode estar antes do 2 ou depois do K).
-- **TRINCA/LAVADEIRA**: Formados por 3 ou mais cartas do mesmo número (o curinga pode ser utilizado).
-- **CURINGA**: A carta número 2 substitui qualquer outra carta. Cada jogo aceita apenas um curinga.
-- **MONTE**: Pilha de cartas que sobraram após serem distribuídas.
-- **MORTO**: Duas pilhas de 11 cartas, uma por time, concedida ao jogador que acabar com as cartas da mão.
-- **LIXO**: Cartas descartadas, todas visíveis.
-- **CANASTRA**: Jogo de 7+ cartas:
-  - **Limpa**: Sem curinga
-  - **Suja**: Com curinga
+### Definitions
 
-### Ações
+- **MELDS**: Three or more cards of the same suit in sequence (Ace can be before 2 or after King).
+- **TRIPLE**: Three or more cards of the same rank (wildcards allowed).
+- **WILDCARD**: The 2 substitutes any card. Each meld may contain at most one wildcard.
+- **STOCK**: Remaining cards after the deal.
+- **DEAD HAND (morto)**: Two piles of 11 cards, one per team, given to the player who first empties their hand.
+- **DISCARD PILE**: Discarded cards, all visible.
+- **CANASTRA**: A meld of 7+ cards:
+  - **Clean**: No wildcards
+  - **Dirty**: With wildcard(s)
 
-- **COMPRAR**: Comprar 1 carta do Monte ou todas do Lixo
-- **BAIXAR JOGO**: Baixar um jogo na mesa
-- **BATER**: Quando acabam as cartas da mão:
-  - **Direta**: Última carta baixada, recebe o morto
-  - **Indireta**: Última carta descartada, usa morto na próxima rodada
-  - **Final**: Encerra a partida (precisa de canastra suja)
+### Actions
 
-### Pontuação
+- **DRAW**: Draw one card from the stock or take the entire discard pile.
+- **LAY DOWN**: Place a new meld on the table.
+- **KNOCK**: When the hand is empty:
+  - **Direct**: Last card was laid; player takes the dead hand.
+  - **Indirect**: Last card was discarded; player takes the dead hand on their next turn.
+  - **Final**: Ends the game (requires a clean canastra to go out).
 
-- Batida Final: +100 pontos
-- Pontos por carta: 10 pontos
-- Canastra Suja: +100 pontos
-- Canastra Limpa: +200 pontos
-- Não pegar o morto: -100 pontos
-- Cartas da mão: pontos negativos
+### Scoring
+
+- Final knock: +100
+- Per card in melds: 10 points each
+- Dirty canastra: +100
+- Clean canastra: +200
+- Never taking the dead hand: -100
+- Cards left in hand: count as negative points
+
+---
+
+## Code organization
+
+The project is split into layers: **data and rules** at the bottom, **game state and flow** in the middle, then **AI/simulation** and **UI**, and finally the **app** that ties everything together.
+
+### Architecture diagram
+
+```mermaid
+flowchart TB
+    subgraph foundation["Foundation"]
+        card["card.py\nCard, Rank, Suit\nDeck, rank order"]
+    end
+
+    subgraph rules["Rules"]
+        game["game.py\nGame (meld)\nValidation, can_form_*"]
+    end
+
+    subgraph core["Core"]
+        engine["engine.py\nEngine, Player\nTurns, phases, scoring"]
+    end
+
+    subgraph extensions["Extensions"]
+        helpers["game_helpers.py\nLegal actions, MCTS AI\nDeterminization, rollouts"]
+        ui["ui_components.py\nCards, panels, melds\nStreamlit widgets"]
+    end
+
+    subgraph entry["Entry points"]
+        app["app.py\nStreamlit app\nSession, layout, actions"]
+        bench["benchmark_bot.py\nBot comparison\nWin-rate tests"]
+    end
+
+    card --> game
+    card --> engine
+    game --> engine
+    engine --> helpers
+    game --> helpers
+    engine --> ui
+    game --> ui
+    helpers --> app
+    ui --> app
+    engine --> bench
+    helpers --> bench
+```
+
+### Module roles
+
+| Module | Role |
+|--------|------|
+| **card.py** | Card representation (`Card`, `Rank`, `Suit`), full deck creation (`create_canastra_deck()`), and canonical rank order for sequences. No dependency on game or engine. |
+| **game.py** | Meld model and rules: `Game` (sequence or triple), validation, `can_form_sequence` / `can_form_triple`, and wildcard-in-sequence rule. Depends only on `card`. |
+| **engine.py** | Game state and flow: `Engine`, `Player`, turn phases (draw → lay down → discard), drawing, laying down, discarding, knock handling, and scoring. Depends on `card` and `game`. |
+| **game_helpers.py** | AI and simulation: legal and abstract action enumeration, applying actions on a clone, determinization (for hidden cards), MCTS/rollouts, “bot suggestion”, and helpers like `detect_game_type`, `find_valid_game`, `organize_hand`. Used by the app and by `benchmark_bot`. Depends on `card`, `engine`, and `game`. |
+| **ui_components.py** | Reusable Streamlit UI: card display, face-down cards, player panels, meld areas, sorting cards for display, app CSS. Depends on `card`, `engine`, and `game`. |
+| **app.py** | Streamlit application: session state, layout (sidebar, table, hand, actions), phase-specific rendering (draw, lay down, discard), and wiring to the engine and game helpers. Depends on `card`, `engine`, `game`, `game_helpers`, and `ui_components`. |
+| **main.py** | Entry point: runs `streamlit run app.py`. |
+| **benchmark_bot.py** | Benchmarks and bot comparison (e.g. control vs challenger, win rate). Depends on `engine` and `game_helpers`. |
+
+### Data flow (simplified)
+
+1. **User action** (e.g. “Draw from stock”) → **app.py** handles the widget and calls **engine** (e.g. `engine.draw_from_stock()`).
+2. **Engine** updates state (hands, stock, phase) and may log messages.
+3. **App** re-renders by reading `engine` and building the page with **ui_components** (cards, panels, melds).
+4. When it’s the AI’s turn, **app** calls **game_helpers.play_ai_turn(engine)**; the helper uses legal actions, MCTS/rollouts, and **engine** methods to perform the turn.
+
+---
 
 ## Interface
 
-A interface Streamlit permite:
-- Ver sua mão e selecionar cartas
-- Comprar do monte ou lixo
-- Baixar sequências ou trincas
-- Adicionar cartas a jogos existentes
-- Descartar cartas
-- Ver log do jogo e status dos outros jogadores
+The Streamlit UI lets you:
 
-## Deploy on the internet (Streamlit Community Cloud)
+- View and select cards in your hand
+- Draw from the stock or the discard pile
+- Lay down sequences or triples
+- Add cards to existing melds
+- Discard a card
+- See the game log and other players’ status (e.g. card counts)
 
-You don’t need a “Deploy” button in the app. Deploy from the Streamlit site:
 
-1. **Push this repo to GitHub** (if it isn’t already).
-2. Open **[share.streamlit.io](https://share.streamlit.io)** and sign in with GitHub.
-3. Click **“Create app”** (top right).
-4. Choose **“Yup, I have an app”** and set:
-   - **Repository**: `your-username/canastra` (or your fork).
-   - **Branch**: `main` (or your default branch).
-   - **Main file path**: `app.py`
-5. (Optional) In **Advanced settings** you can set Python version (e.g. 3.12) and secrets.
-6. Click **Deploy**. The app will get a URL like `https://something.streamlit.app`.
 
-The project includes `requirements.txt` so Community Cloud can install dependencies. If you add packages in `pyproject.toml`, add them to `requirements.txt` too for deployment.
+---
 
-## Estrutura do Projeto
+## Project structure
 
 ```
 canastra/
-├── __init__.py              # Inicialização do pacote
-├── card.py                  # Representação de cartas
-├── game.py                  # Regras e validação de jogos
-├── engine.py                # Engine do jogo
-├── app.py                   # Interface Streamlit
-├── main.py                  # Ponto de entrada
-├── requirements.txt         # Dependências para deploy
-└── README.md                # Este arquivo
+├── __init__.py          # Package exports (Card, Engine, Game, …)
+├── card.py              # Cards, deck, rank order
+├── game.py              # Melds and rules
+├── engine.py            # Game state and flow
+├── game_helpers.py      # AI, legal actions, simulation
+├── ui_components.py     # Streamlit UI building blocks
+├── app.py               # Streamlit app (orchestrator)
+├── main.py              # Entry point (runs streamlit run app.py)
+├── benchmark_bot.py     # Bot benchmarks and comparison
+├── requirements.txt    # Dependencies for deploy
+├── pyproject.toml       # Project and test config
+├── README.md
+└── tests/
+    ├── __init__.py
+    └── test_integration.py
 ```

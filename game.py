@@ -1,9 +1,8 @@
 """Canastra game rules."""
 
 from enum import Enum
-from typing import Optional
 
-from card import Card, Rank, Suit
+from card import RANK_ORDER_SEQUENCE, Card, Rank, Suit
 
 
 class GameType(Enum):
@@ -22,7 +21,7 @@ def _is_natural_in_sequence(card: Card, suit: Suit) -> bool:
     return card.suit == suit and (not is_wildcard(card) or card.rank == Rank.TWO)
 
 
-def _counts_as_wildcard_in_sequence(card: Card, suit: Suit) -> bool:
+def counts_as_wildcard_in_sequence(card: Card, suit: Suit) -> bool:
     """True if card counts toward the one-wildcard limit (Joker or 2 of
     another suit)."""
     return is_wildcard(card) and not (card.rank == Rank.TWO and card.suit == suit)
@@ -52,7 +51,7 @@ class Game:
         self,
         game_type: GameType,
         cards: list[Card],
-        suit: Optional[Suit] = None,
+        suit: Suit | None = None,
         *,
         _skip_validate: bool = False,
     ):
@@ -74,16 +73,28 @@ class Game:
         elif self.game_type == GameType.TRIPLE:
             self._validate_triple()
 
+    def _wildcard_can_fill_sequence(self, ranks_sorted: list[Rank]) -> bool:
+        """True if one wildcard can fill the gaps in these ranks
+        (normal or A-at-end)."""
+        if self._sequence_total_gaps(ranks_sorted) <= 1:
+            return True
+        if Rank.ACE not in ranks_sorted or Rank.KING in ranks_sorted:
+            return False
+        other_ranks = [r for r in ranks_sorted if r != Rank.ACE]
+        if not other_ranks:
+            return False
+        highest_rank = max(other_ranks, key=lambda r: self._get_rank_index(r))
+        highest_idx = self._get_rank_index(highest_rank)
+        return highest_idx >= 9  # 10, J, Q with A at end
+
     def _validate_sequence(self):
         """Validate sequence of the same suit (2 of the sequence suit counts
         as natural)."""
         wildcards = [
-            c for c in self.cards if _counts_as_wildcard_in_sequence(c, self.suit)
+            c for c in self.cards if counts_as_wildcard_in_sequence(c, self.suit)
         ]
         if len(wildcards) > 1:
             raise ValueError("Only one wildcard per game")
-
-        has_wildcard = len(wildcards) == 1
 
         natural_cards = [c for c in self.cards if _is_natural_in_sequence(c, self.suit)]
         if len(natural_cards) < 2:
@@ -97,91 +108,33 @@ class Game:
         if len(ranks) != len(set(ranks)):
             raise ValueError("Sequência não pode ter cartas repetidas do mesmo naipe")
 
-        if has_wildcard:
+        if len(wildcards) == 1:
             if len(ranks) < 2:
                 raise ValueError(
                     "Sequence with wildcard needs at least 2 natural cards"
                 )
             ranks_sorted = self._sort_ranks_for_sequence(ranks)
-
-            # Check if sequence can be formed with wildcard
-            # Try both normal order and wrapped order (A at end)
-            can_form = False
-
-            # Normal order check
-            gaps = 0
-            for i in range(len(ranks_sorted) - 1):
-                current_idx = self._get_rank_index(ranks_sorted[i])
-                next_idx = self._get_rank_index(ranks_sorted[i + 1])
-                if Rank.ACE in ranks_sorted and Rank.KING in ranks_sorted:
-                    if ranks_sorted[i] == Rank.KING and ranks_sorted[i + 1] == Rank.ACE:
-                        continue
-                gap = next_idx - current_idx - 1
-                gaps += gap
-            if gaps <= 1:
-                can_form = True
-
-            # Wrapped order check (A at end) - for cases like A, wildcard, Q
-            # or A, wildcard, J, etc. In Canastra, A can be at the end:
-            # ...K, A, 2, 3...Q. Valid pattern: A (at end), wildcard (as 2),
-            # and a high card (10, J, Q)
-            if (
-                not can_form
-                and Rank.ACE in ranks_sorted
-                and Rank.KING not in ranks_sorted
-            ):
-                # Get the highest rank that's not A
-                other_ranks = [r for r in ranks_sorted if r != Rank.ACE]
-                if other_ranks:
-                    highest_rank = max(
-                        other_ranks, key=lambda r: self._get_rank_index(r)
-                    )
-                    highest_idx = self._get_rank_index(highest_rank)
-
-                    # If highest rank is 10, J, or Q, and we have A at end
-                    # with wildcard, this forms a valid sequence in Canastra.
-                    # Example: K, A, wildcard (as 2), 3, 4, 5, 6, 7, 8, 9, 10,
-                    # J, Q. The wildcard fills the gap, allowing A (at end)
-                    # to connect to the high card.
-                    if highest_idx >= 9:  # 10 (9), J (10), Q (11)
-                        can_form = True
-
-            if not can_form:
+            if not self._wildcard_can_fill_sequence(ranks_sorted):
                 raise ValueError("Wildcard cannot fill more than one gap")
-        else:
-            ranks_sorted = self._sort_ranks_for_sequence(ranks)
-            if self._is_sequence(ranks_sorted):
-                return
-            # 2 of the sequence suit can act as wildcard (e.g. 5H, 2H, 7H with 2H as 6)
-            twos_of_suit = [
-                c for c in self.cards if c.rank == Rank.TWO and c.suit == self.suit
-            ]
-            if len(twos_of_suit) == 1:
-                ranks_without_2 = [r for r in ranks if r != Rank.TWO]
-                if len(ranks_without_2) >= 2:
-                    other_sorted = self._sort_ranks_for_sequence(ranks_without_2)
-                    if self._sequence_total_gaps(other_sorted) <= 1:
-                        return
-            raise ValueError("Cards do not form a valid sequence")
+            return
+
+        ranks_sorted = self._sort_ranks_for_sequence(ranks)
+        if self._is_sequence(ranks_sorted):
+            return
+        twos_of_suit = [
+            c for c in self.cards if c.rank == Rank.TWO and c.suit == self.suit
+        ]
+        if len(twos_of_suit) == 1:
+            ranks_without_2 = [r for r in ranks if r != Rank.TWO]
+            if len(ranks_without_2) >= 2:
+                other_sorted = self._sort_ranks_for_sequence(ranks_without_2)
+                if self._sequence_total_gaps(other_sorted) <= 1:
+                    return
+        raise ValueError("Cards do not form a valid sequence")
 
     def _get_rank_index(self, rank: Rank) -> int:
-        """Return the index of the rank in order."""
-        rank_order = [
-            Rank.ACE,
-            Rank.TWO,
-            Rank.THREE,
-            Rank.FOUR,
-            Rank.FIVE,
-            Rank.SIX,
-            Rank.SEVEN,
-            Rank.EIGHT,
-            Rank.NINE,
-            Rank.TEN,
-            Rank.JACK,
-            Rank.QUEEN,
-            Rank.KING,
-        ]
-        return rank_order.index(rank)
+        """Return the index of the rank in sequence order."""
+        return RANK_ORDER_SEQUENCE.index(rank)
 
     def _validate_triple(self):
         """Validate triple of the same number."""
@@ -202,23 +155,7 @@ class Game:
 
     def _sort_ranks_for_sequence(self, ranks: list[Rank]) -> list[Rank]:
         """Sort ranks considering Ace before 2 or after K."""
-        rank_order = [
-            Rank.ACE,
-            Rank.TWO,
-            Rank.THREE,
-            Rank.FOUR,
-            Rank.FIVE,
-            Rank.SIX,
-            Rank.SEVEN,
-            Rank.EIGHT,
-            Rank.NINE,
-            Rank.TEN,
-            Rank.JACK,
-            Rank.QUEEN,
-            Rank.KING,
-        ]
-
-        sorted_ranks = sorted(ranks, key=lambda r: rank_order.index(r))
+        sorted_ranks = sorted(ranks, key=lambda r: RANK_ORDER_SEQUENCE.index(r))
 
         if Rank.ACE in ranks and Rank.KING in ranks:
             ace_pos = sorted_ranks.index(Rank.ACE)
@@ -237,25 +174,9 @@ class Game:
         if len(ranks) < 2:
             return False
 
-        rank_order = [
-            Rank.ACE,
-            Rank.TWO,
-            Rank.THREE,
-            Rank.FOUR,
-            Rank.FIVE,
-            Rank.SIX,
-            Rank.SEVEN,
-            Rank.EIGHT,
-            Rank.NINE,
-            Rank.TEN,
-            Rank.JACK,
-            Rank.QUEEN,
-            Rank.KING,
-        ]
-
         for i in range(len(ranks) - 1):
-            current_idx = rank_order.index(ranks[i])
-            next_idx = rank_order.index(ranks[i + 1])
+            current_idx = RANK_ORDER_SEQUENCE.index(ranks[i])
+            next_idx = RANK_ORDER_SEQUENCE.index(ranks[i + 1])
 
             if Rank.ACE in ranks and Rank.KING in ranks:
                 if ranks[i] == Rank.KING and ranks[i + 1] == Rank.ACE:
@@ -307,63 +228,59 @@ class Game:
 
         return base
 
+    def _can_add_to_sequence(self, card: Card) -> bool:
+        """Check if card can be added to this sequence game."""
+        if counts_as_wildcard_in_sequence(card, self.suit):
+            wildcards = [
+                c for c in self.cards if counts_as_wildcard_in_sequence(c, self.suit)
+            ]
+            return len(wildcards) == 0
+        if not _is_natural_in_sequence(card, self.suit):
+            return False
+        existing_natural_ranks = [
+            c.rank for c in self.cards if _is_natural_in_sequence(c, self.suit)
+        ]
+        if card.rank in existing_natural_ranks:
+            return False
+        ranks = existing_natural_ranks + [card.rank]
+        ranks_sorted = self._sort_ranks_for_sequence(ranks)
+        if self._is_sequence(ranks_sorted):
+            return True
+        wildcards = [c for c in self.cards if is_wildcard(c)]
+        if len(wildcards) != 1:
+            return False
+        twos_of_suit = [
+            c for c in self.cards if c.rank == Rank.TWO and c.suit == self.suit
+        ]
+        if len(twos_of_suit) == 1:
+            ranks_without_2 = [r for r in ranks if r != Rank.TWO]
+            if len(ranks_without_2) >= 2:
+                gaps = self._sequence_total_gaps(
+                    self._sort_ranks_for_sequence(ranks_without_2)
+                )
+                if gaps <= 1:
+                    return True
+        return self._sequence_total_gaps(ranks_sorted) <= 1
+
+    def _can_add_to_triple(self, card: Card) -> bool:
+        """Check if card can be added to this triple game."""
+        if is_wildcard(card):
+            return len([c for c in self.cards if is_wildcard(c)]) == 0
+        allowed_ranks = {Rank.ACE, Rank.THREE, Rank.KING}
+        if card.rank not in allowed_ranks:
+            return False
+        ranks = [c.rank for c in self.cards if not is_wildcard(c)]
+        if not ranks:
+            return True
+        return card.rank == ranks[0]
+
     def can_add(self, card: Card) -> bool:
         """Check if a card can be added to the game (2 of sequence suit counts
         as natural)."""
         if self.game_type == GameType.SEQUENCE:
-            if _counts_as_wildcard_in_sequence(card, self.suit):
-                wildcards = [
-                    c
-                    for c in self.cards
-                    if _counts_as_wildcard_in_sequence(c, self.suit)
-                ]
-                return len(wildcards) == 0
-
-            if not _is_natural_in_sequence(card, self.suit):
-                return False
-            existing_natural_ranks = [
-                c.rank for c in self.cards if _is_natural_in_sequence(c, self.suit)
-            ]
-            if card.rank in existing_natural_ranks:
-                return False  # sequence cannot have duplicate ranks
-
-            ranks = existing_natural_ranks + [card.rank]
-            ranks_sorted = self._sort_ranks_for_sequence(ranks)
-            if self._is_sequence(ranks_sorted):
-                return True
-            # With one wildcard in the game, one gap is allowed
-            wildcards = [c for c in self.cards if is_wildcard(c)]
-            if len(wildcards) == 1:
-                # If the wildcard is 2 of the suit (e.g. 5H,2H,7H), exclude it
-                # from ranks for gap check
-                twos_of_suit = [
-                    c for c in self.cards if c.rank == Rank.TWO and c.suit == self.suit
-                ]
-                if len(twos_of_suit) == 1:
-                    ranks_without_2 = [r for r in ranks if r != Rank.TWO]
-                    gaps = self._sequence_total_gaps(
-                        self._sort_ranks_for_sequence(ranks_without_2)
-                    )
-                    if len(ranks_without_2) >= 2 and gaps <= 1:
-                        return True
-                elif self._sequence_total_gaps(ranks_sorted) <= 1:
-                    return True
-            return False
-
-        elif self.game_type == GameType.TRIPLE:
-            if is_wildcard(card):
-                wildcards = [c for c in self.cards if is_wildcard(c)]
-                return len(wildcards) == 0
-
-            allowed_ranks = {Rank.ACE, Rank.THREE, Rank.KING}
-            if card.rank not in allowed_ranks:
-                return False
-
-            ranks = [c.rank for c in self.cards if not is_wildcard(c)]
-            if not ranks:
-                return True
-            return card.rank == ranks[0]
-
+            return self._can_add_to_sequence(card)
+        if self.game_type == GameType.TRIPLE:
+            return self._can_add_to_triple(card)
         return False
 
     def add_card(self, card: Card):
@@ -373,7 +290,11 @@ class Game:
                 f"Não é possível adicionar {card_display_pt(card)} a este jogo"
             )
         self.cards.append(card)
-        self._validate()
+        try:
+            self._validate()
+        except ValueError:
+            self.cards.pop()
+            raise
 
 
 def can_form_sequence(cards: list[Card], suit: Suit) -> bool:

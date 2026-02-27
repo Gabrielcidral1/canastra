@@ -2,9 +2,8 @@
 
 import random
 from itertools import combinations
-from typing import Optional
 
-from card import Card, Rank, Suit
+from card import RANK_ORDER_DISPLAY_ACE_HIGH, Card, Rank, Suit, create_canastra_deck
 from engine import Engine, TurnPhase
 from game import can_form_sequence, can_form_triple
 
@@ -18,30 +17,20 @@ COUNTERFACTUAL_ROLLOUT_MAX_STEPS = 20
 ROLLOUT_MAX_STEPS = 15  # default for rollouts
 ABSTR_MAX_ADD_TO_GAME = 3  # max "add to game" actions in abstract set
 ABSTR_MAX_DISCARD = 6  # max discard options in abstract set
-# In rollouts, opponent takes discard when they can use it (model learns not to feed them)
+# In rollouts, opponent takes discard when they can use it
+# (model learns not to feed them)
 ROLLOUT_OPPONENT_TAKE_USEFUL_DISCARD_PROB = 0.6
-# Bias our team in rollouts to take the discard when we can use it (more realistic sim)
+# Bias our team in rollouts to take the discard when we can use it
+# (more realistic sim)
 ROLLOUT_OUR_TAKE_USEFUL_DISCARD_PROB = 0.6
-# Penalty (in score units) for choosing a "dangerous" discard when alternatives are similar
+# Penalty (in score units) for choosing a "dangerous" discard
+# when alternatives are similar
 DISCARD_DANGER_PENALTY = 50.0
 
 
-def _create_full_deck():
-    """Return a full Canastra deck (2 decks + 4 jokers) as list of Card."""
-    deck = []
-    for _ in range(4):
-        deck.append(Card(Rank.JOKER))
-    ranks = [r for r in Rank if r != Rank.JOKER]
-    suits = [Suit.CLUBS, Suit.DIAMONDS, Suit.HEARTS, Suit.SPADES]
-    for _ in range(2):
-        for rank in ranks:
-            for suit in suits:
-                deck.append(Card(rank, suit))
-    return deck
-
-
 def _visible_cards_multiset(engine: Engine, observer_index: int) -> list[tuple]:
-    """All cards visible to observer: their hand, discard, all melds. As (rank, suit)."""
+    """All cards visible to observer: their hand, discard, all melds.
+    As (rank, suit)."""
     out = []
     obs = engine.players[observer_index]
     for c in obs.hand:
@@ -57,7 +46,7 @@ def _visible_cards_multiset(engine: Engine, observer_index: int) -> list[tuple]:
 
 def _unknown_cards(engine: Engine, observer_index: int) -> list[Card]:
     """Cards not visible to observer (stock + opponents' hands). One copy per card."""
-    full = _create_full_deck()
+    full = create_canastra_deck()
     visible = _visible_cards_multiset(engine, observer_index)
     # Remove one copy per visible (rank, suit)
     for r, s in visible:
@@ -97,45 +86,62 @@ def _determinize(engine: Engine, observer_index: int, rng: random.Random) -> Eng
     return clone
 
 
-def _get_legal_actions(engine: Engine) -> list[tuple]:
-    """Enumerate legal actions for current player. Each action is a tuple to pass to _apply_action."""
-    player = engine.get_current_player()
+def _collect_add_to_game_actions(engine: Engine, player) -> list[tuple]:
+    """All legal add_to_game actions for current player."""
+    team_players = [p for p in engine.players if p.team == player.team]
+    out = []
+    for card in list(player.hand):
+        for p in team_players:
+            for gi, game in enumerate(p.games):
+                if game.can_add(card):
+                    out.append((
+                        "add_to_game", engine.players.index(p), gi,
+                        card.rank, card.suit,
+                    ))
+                    break
+    return out
+
+
+def _actions_draw(engine: Engine) -> list[tuple]:
+    """Legal actions in DRAW phase."""
     actions = []
+    if engine.stock:
+        actions.append(("draw_stock",))
+    if engine.discard_pile:
+        actions.append(("draw_discard",))
+    return actions
 
+
+def _actions_lay_down(engine: Engine) -> list[tuple]:
+    """Legal actions in LAY_DOWN phase."""
+    player = engine.get_current_player()
+    actions = _collect_add_to_game_actions(engine, player)
+    game_result = find_valid_game(player, player.hand)
+    if game_result:
+        gt, suit, cards = game_result
+        if gt == "sequence":
+            actions.append(("lay_sequence", suit, [(c.rank, c.suit) for c in cards]))
+        else:
+            actions.append(("lay_triple", [(c.rank, c.suit) for c in cards]))
+    actions.append(("end_lay_down",))
+    return actions
+
+
+def _actions_discard(engine: Engine) -> list[tuple]:
+    """Legal actions in DISCARD phase."""
+    player = engine.get_current_player()
+    return [("discard", i) for i in range(len(player.hand))]
+
+
+def _get_legal_actions(engine: Engine) -> list[tuple]:
+    """Enumerate legal actions for current player.
+    Each action is a tuple to pass to _apply_action."""
     if engine.turn_phase == TurnPhase.DRAW:
-        if engine.stock:
-            actions.append(("draw_stock",))
-        if engine.discard_pile:
-            actions.append(("draw_discard",))
-        return actions if actions else []
-
+        return _actions_draw(engine)
     if engine.turn_phase == TurnPhase.LAY_DOWN:
-        team_players = [p for p in engine.players if p.team == player.team]
-        for card in list(player.hand):
-            for p in team_players:
-                for gi, game in enumerate(p.games):
-                    if game.can_add(card):
-                        owner_idx = engine.players.index(p)
-                        actions.append(
-                            ("add_to_game", owner_idx, gi, card.rank, card.suit)
-                        )
-
-        game_result = find_valid_game(player, player.hand)
-        if game_result:
-            gt, suit, cards = game_result
-            if gt == "sequence":
-                actions.append(("lay_sequence", suit, [(c.rank, c.suit) for c in cards]))
-            else:
-                actions.append(("lay_triple", [(c.rank, c.suit) for c in cards]))
-
-        actions.append(("end_lay_down",))
-        return actions
-
+        return _actions_lay_down(engine)
     if engine.turn_phase == TurnPhase.DISCARD:
-        for i, c in enumerate(player.hand):
-            actions.append(("discard", i))
-        return actions
-
+        return _actions_discard(engine)
     return []
 
 
@@ -146,111 +152,82 @@ def _get_abstract_actions(
     max_discard: int = ABSTR_MAX_DISCARD,
 ) -> list[tuple]:
     """Small set of actions (abstraction) so we don't expand every meld arrangement."""
-    player = engine.get_current_player()
-    actions = []
-
     if engine.turn_phase == TurnPhase.DRAW:
-        if engine.stock:
-            actions.append(("draw_stock",))
-        if engine.discard_pile:
-            actions.append(("draw_discard",))
-        return actions
-
+        return _actions_draw(engine)
     if engine.turn_phase == TurnPhase.LAY_DOWN:
-        team_players = [p for p in engine.players if p.team == player.team]
-        add_actions = []
-        for card in list(player.hand):
-            for p in team_players:
-                for gi, game in enumerate(p.games):
-                    if game.can_add(card):
-                        add_actions.append(
-                            (
-                                "add_to_game",
-                                engine.players.index(p),
-                                gi,
-                                card.rank,
-                                card.suit,
-                            )
-                        )
-                        break
+        player = engine.get_current_player()
+        add_actions = _collect_add_to_game_actions(engine, player)
         if len(add_actions) > max_add_to_game:
             add_actions = list(rng.sample(add_actions, max_add_to_game))
-        actions.extend(add_actions)
-
+        actions = add_actions.copy()
         game_result = find_valid_game(player, player.hand)
         if game_result:
             gt, suit, cards = game_result
             if gt == "sequence":
-                actions.append(
-                    ("lay_sequence", suit, [(c.rank, c.suit) for c in cards])
-                )
+                actions.append((
+                    "lay_sequence", suit, [(c.rank, c.suit) for c in cards],
+                ))
             else:
                 actions.append(("lay_triple", [(c.rank, c.suit) for c in cards]))
         actions.append(("end_lay_down",))
         return actions
-
     if engine.turn_phase == TurnPhase.DISCARD:
-        for i in range(len(player.hand)):
-            actions.append(("discard", i))
+        actions = _actions_discard(engine)
         if len(actions) > max_discard:
             actions = list(rng.sample(actions, max_discard))
         return actions
-
     return []
+
+
+def _resolve_cards_from_hand(player, card_tuples: list[tuple]) -> list[Card] | None:
+    """Resolve (rank, suit) tuples to Card list from player hand.
+    Returns None if any missing."""
+    remaining = list(player.hand)
+    cards = []
+    for r, s in card_tuples:
+        c = next((x for x in remaining if x.rank == r and x.suit == s), None)
+        if c is None:
+            return None
+        cards.append(c)
+        remaining.remove(c)
+    return cards
 
 
 def _apply_action(engine: Engine, action: tuple) -> bool:
     """Apply one action to engine. Returns True if successful."""
     player = engine.get_current_player()
     kind = action[0]
+
     if kind == "draw_stock":
-        err = engine.draw_from_stock()
-        return err is None
+        return engine.draw_from_stock() is None
     if kind == "draw_discard":
-        err = engine.draw_from_discard()
-        return err is None
+        return engine.draw_from_discard() is None
     if kind == "end_lay_down":
         engine.end_lay_down_phase()
         return True
+
     if kind == "lay_sequence":
         _, suit, card_tuples = action
-        remaining = list(player.hand)
-        cards = []
-        for r, s in card_tuples:
-            c = next((x for x in remaining if x.rank == r and x.suit == s), None)
-            if c is None:
-                return False
-            cards.append(c)
-            remaining.remove(c)
-        err = engine.lay_down_sequence(suit, cards)
-        return err is None
+        cards = _resolve_cards_from_hand(player, card_tuples)
+        return cards is not None and engine.lay_down_sequence(suit, cards) is None
     if kind == "lay_triple":
         _, card_tuples = action
-        remaining = list(player.hand)
-        cards = []
-        for r, s in card_tuples:
-            c = next((x for x in remaining if x.rank == r and x.suit == s), None)
-            if c is None:
-                return False
-            cards.append(c)
-            remaining.remove(c)
-        err = engine.lay_down_triple(cards)
-        return err is None
+        cards = _resolve_cards_from_hand(player, card_tuples)
+        return cards is not None and engine.lay_down_triple(cards) is None
+
     if kind == "add_to_game":
         _, owner_idx, game_idx, rank, suit = action
         card = next((c for c in player.hand if c.rank == rank and c.suit == suit), None)
         if card is None:
             return False
-        target = engine.players[owner_idx]
-        err = engine.add_to_game(game_idx, card, target_player=target)
-        return err is None
+        return engine.add_to_game(
+            game_idx, card, target_player=engine.players[owner_idx],
+        ) is None
     if kind == "discard":
         _, hand_idx = action
         if hand_idx >= len(player.hand):
             return False
-        card = player.hand[hand_idx]
-        err = engine.discard(card)
-        return err is None
+        return engine.discard(player.hand[hand_idx]) is None
     return False
 
 
@@ -264,10 +241,27 @@ def _current_player_can_use_discard_top(engine: Engine) -> bool:
     return any(game.can_add(top_card) for game in player.games)
 
 
+def _danger_team_can_use(engine: Engine, card: Card) -> float:
+    """Danger from discarding a card our team could add to a meld."""
+    player = engine.get_current_player()
+    team_players = [p for p in engine.players if p.team == player.team]
+    if any(game.can_add(card) for p in team_players for game in p.games):
+        return 0.9
+    return 0.0
+
+
+def _danger_pile_match(engine: Engine, card: Card) -> float:
+    """Danger from discarding same rank as pile top (next player may take pile)."""
+    if not engine.discard_pile:
+        return 0.0
+    top = engine.discard_pile[-1]
+    if top.rank == card.rank or (top.rank == Rank.JOKER and card.rank == Rank.TWO):
+        return 0.5
+    return 0.0
+
+
 def _discard_danger(engine: Engine, action: tuple) -> float:
-    """Return a danger score for a discard action (0 = safe, 1 = very bad).
-    Used to avoid blunders: don't feed jokers or pile-top matches to next player;
-    don't discard a card we could add to our team's melds."""
+    """Return a danger score for a discard action (0 = safe, 1 = very bad)."""
     if not action or action[0] != "discard":
         return 0.0
     player = engine.get_current_player()
@@ -275,21 +269,12 @@ def _discard_danger(engine: Engine, action: tuple) -> float:
     if hand_idx >= len(player.hand):
         return 0.0
     card = player.hand[hand_idx]
-    danger = 0.0
-    # Blunder: discarding a card we could add to one of our melds (e.g. 5♣ when we have 6♣-7♣)
-    team_players = [p for p in engine.players if p.team == player.team]
-    for p in team_players:
-        for game in p.games:
-            if game.can_add(card):
-                danger = max(danger, 0.9)
-                break
     if card.rank == Rank.JOKER:
-        danger = 1.0  # joker is very useful to anyone
-    elif engine.discard_pile:
-        top = engine.discard_pile[-1]
-        if top.rank == card.rank or (top.rank == Rank.JOKER and card.rank == Rank.TWO):
-            danger = max(danger, 0.5)  # same rank on pile: next player may take pile and use it
-    return danger
+        return 1.0
+    return max(
+        _danger_team_can_use(engine, card),
+        _danger_pile_match(engine, card),
+    )
 
 
 def _is_early_game(engine: Engine) -> bool:
@@ -298,8 +283,9 @@ def _is_early_game(engine: Engine) -> bool:
 
 
 def _early_trinca_penalty(engine: Engine, action: tuple) -> float:
-    """Penalty for choosing lay_triple in early game (trincas are rarely good early, especially with wildcards).
-    Returns a score penalty to subtract (higher = worse action)."""
+    """Penalty for choosing lay_triple in early game (trincas rarely good
+    early, especially with wildcards). Returns a score penalty to subtract
+    (higher = worse action)."""
     if not action or action[0] != "lay_triple":
         return 0.0
     if not _is_early_game(engine):
@@ -370,11 +356,11 @@ def _fast_rollout(
     return _heuristic_state_score(engine, our_team)
 
 
-def _ucb(mean: float, n: int, N: int, c: float = 1.4) -> float:
+def _ucb(mean: float, n: int, n_total: int, c: float = 1.4) -> float:
     """UCB for action selection (progressive widening)."""
     if n == 0:
         return float("inf")
-    return mean + c * (float(N + 1) ** 0.5) / (n ** 0.5)
+    return mean + c * (float(n_total + 1) ** 0.5) / (n ** 0.5)
 
 
 def _is_mcts_choose(
@@ -386,7 +372,8 @@ def _is_mcts_choose(
     rollout_max_steps: int | None = None,
     discourage_early_trinca: bool = False,
 ) -> tuple | None:
-    """IS-MCTS with progressive widening: fixed total rollouts, UCB selects which action to try."""
+    """IS-MCTS with progressive widening: fixed total rollouts,
+    UCB selects which action to try."""
     if use_abstract_actions:
         actions = _get_abstract_actions(engine, rng)
     else:
@@ -398,17 +385,18 @@ def _is_mcts_choose(
 
     steps = rollout_max_steps if rollout_max_steps is not None else ROLLOUT_MAX_STEPS
     scores: list[list[float]] = [[] for _ in range(len(actions))]
-    N = 0
+    n_total = 0
     for _ in range(total_rollouts):
-        if N < len(actions):
-            ai = N % len(actions)
+        if n_total < len(actions):
+            ai = n_total % len(actions)
         else:
             means = [
                 sum(scores[i]) / len(scores[i]) if scores[i] else 0.0
                 for i in range(len(actions))
             ]
             ucb_vals = [
-                _ucb(means[i], len(scores[i]), N) for i in range(len(actions))
+                _ucb(means[i], len(scores[i]), n_total)
+                for i in range(len(actions))
             ]
             ai = int(max(range(len(actions)), key=lambda i: ucb_vals[i]))
         action = actions[ai]
@@ -416,7 +404,7 @@ def _is_mcts_choose(
         if _apply_action(clone, action):
             s = _fast_rollout(clone, our_team, rng, max_steps=steps)
             scores[ai].append(s)
-        N += 1
+        n_total += 1
 
     # Choose action with best mean score, minus penalties for bad choices
     def effective_mean(i: int) -> float:
@@ -459,26 +447,25 @@ def detect_game_type(cards):
         return (None, None)
 
 
+def _first_valid_game_from_cards(cards: list[Card]):
+    """If these cards form a valid game, return (type, suit, cards); else None."""
+    if len(cards) < 3:
+        return None
+    for suit in [Suit.CLUBS, Suit.DIAMONDS, Suit.HEARTS, Suit.SPADES]:
+        if can_form_sequence(cards, suit):
+            return ("sequence", suit, cards)
+        if can_form_triple(cards):
+            return ("triple", None, cards)
+    return None
+
+
 def find_valid_game(player, hand):
     """Try to find a valid game from player's hand."""
-    for suit in [Suit.CLUBS, Suit.DIAMONDS, Suit.HEARTS, Suit.SPADES]:
-        for i in range(len(hand) - 2):
-            for j in range(i + 1, len(hand) - 1):
-                for k in range(j + 1, len(hand)):
-                    cards = [hand[i], hand[j], hand[k]]
-                    if can_form_sequence(cards, suit):
-                        return ("sequence", suit, cards)
-                    if can_form_triple(cards):
-                        return ("triple", None, cards)
-
-    for suit in [Suit.CLUBS, Suit.DIAMONDS, Suit.HEARTS, Suit.SPADES]:
-        for combo_size in range(4, min(8, len(hand) + 1)):
-            for combo in combinations(hand, combo_size):
-                cards = list(combo)
-                if can_form_sequence(cards, suit):
-                    return ("sequence", suit, cards)
-                if can_form_triple(cards):
-                    return ("triple", None, cards)
+    for size in range(3, min(8, len(hand) + 1)):
+        for combo in combinations(hand, size):
+            result = _first_valid_game_from_cards(list(combo))
+            if result is not None:
+                return result
     return None
 
 
@@ -529,7 +516,8 @@ def _action_description(engine: Engine, action: tuple) -> str:
 def get_counterfactual_action(engine: Engine) -> tuple[tuple | None, str]:
     """What the bot would play in the current state. Returns (action, description).
     Use when it is the human's turn to show a counterfactual suggestion.
-    Uses full legal actions and more rollouts for a stronger, more expensive suggestion."""
+    Uses full legal actions and more rollouts for a stronger,
+    more expensive suggestion."""
     if engine.game_over:
         return (None, "")
     player = engine.get_current_player()
@@ -551,20 +539,24 @@ def get_counterfactual_action(engine: Engine) -> tuple[tuple | None, str]:
 
 def play_ai_turn(
     engine: Engine,
-    rollouts: Optional[int] = None,
-    rollout_max_steps: Optional[int] = None,
+    rollouts: int | None = None,
+    rollout_max_steps: int | None = None,
     discourage_early_trinca: bool = False,
 ) -> None:
     """Play one turn for the current AI player.
 
     Uses module constants AI_TURN_ROLLOUTS and AI_TURN_ROLLOUT_MAX_STEPS by default.
     Pass rollouts/rollout_max_steps for config (e.g. control vs challenger).
-    Pass discourage_early_trinca=True to prefer sequences over trincas early and avoid using jokers in trincas early.
+    Pass discourage_early_trinca=True to prefer sequences over trincas early
+    and avoid using jokers in trincas early.
     """
     player = engine.get_current_player()
     rng = random.Random()
     n_rollouts = rollouts if rollouts is not None else AI_TURN_ROLLOUTS
-    n_steps = rollout_max_steps if rollout_max_steps is not None else AI_TURN_ROLLOUT_MAX_STEPS
+    n_steps = (
+        rollout_max_steps if rollout_max_steps is not None
+        else AI_TURN_ROLLOUT_MAX_STEPS
+    )
     best = _is_mcts_choose(
         engine,
         player.team,
@@ -586,48 +578,41 @@ def play_ai_turn(
         engine._calculate_final_points()
 
 
+def _rank_display_index(rank: Rank) -> int:
+    """Index for display order (Ace high). Joker not in RANK_ORDER_DISPLAY_ACE_HIGH."""
+    if rank in RANK_ORDER_DISPLAY_ACE_HIGH:
+        return RANK_ORDER_DISPLAY_ACE_HIGH.index(rank)
+    return 99
+
+
+def _place_joker_in_first_gap(
+    suit_cards: list[Card], ranks: list[float], joker: Card,
+) -> bool:
+    """Insert joker into first gap in suit_cards. Mutates suit_cards and ranks.
+    Returns True if placed."""
+    for i in range(len(ranks) - 1):
+        if ranks[i + 1] - ranks[i] > 1:
+            suit_cards.insert(i + 1, joker)
+            ranks.insert(i + 1, ranks[i] + 0.5)
+            return True
+    return False
+
+
 def organize_hand(hand):
     """Organize hand by suit with jokers in gaps."""
-    # Ace high for display ordering (A after K)
-    rank_order = {
-        Rank.TWO: 2,
-        Rank.THREE: 3,
-        Rank.FOUR: 4,
-        Rank.FIVE: 5,
-        Rank.SIX: 6,
-        Rank.SEVEN: 7,
-        Rank.EIGHT: 8,
-        Rank.NINE: 9,
-        Rank.TEN: 10,
-        Rank.JACK: 11,
-        Rank.QUEEN: 12,
-        Rank.KING: 13,
-        Rank.ACE: 14,
-    }
-
     jokers = [c for c in hand if c.rank == Rank.JOKER]
     non_jokers = [c for c in hand if c.rank != Rank.JOKER]
-
     organized_hand = []
     for suit in [Suit.CLUBS, Suit.DIAMONDS, Suit.HEARTS, Suit.SPADES]:
         suit_cards = [c for c in non_jokers if c.suit == suit]
-        suit_cards.sort(key=lambda c: rank_order.get(c.rank, 14))
-
+        suit_cards.sort(key=lambda c: _rank_display_index(c.rank))
         if suit_cards and jokers:
-            ranks = [rank_order.get(c.rank, 14) for c in suit_cards]
-            for joker in jokers[:]:
-                placed = False
-                for i in range(len(ranks) - 1):
-                    if ranks[i + 1] - ranks[i] > 1:
-                        suit_cards.insert(i + 1, joker)
-                        ranks.insert(i + 1, ranks[i] + 0.5)
-                        jokers.remove(joker)
-                        placed = True
-                        break
-                if not placed:
+            ranks = [_rank_display_index(c.rank) for c in suit_cards]
+            for joker in list(jokers):
+                if _place_joker_in_first_gap(suit_cards, ranks, joker):
+                    jokers.remove(joker)
+                else:
                     break
-
         organized_hand.extend(suit_cards)
-
     organized_hand.extend(jokers)
     return organized_hand

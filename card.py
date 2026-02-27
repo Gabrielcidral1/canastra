@@ -1,5 +1,7 @@
 """Card representation and utilities for Canastra game."""
 
+from __future__ import annotations
+
 from enum import Enum
 
 
@@ -30,6 +32,55 @@ class Rank(Enum):
     QUEEN = "Q"
     KING = "K"
     JOKER = "Joker"  # distinct value so Enum has 14 members (13 ranks + joker)
+
+
+# Canonical order for sequence logic (A before 2, then 3..K)
+RANK_ORDER_SEQUENCE: tuple = (
+    Rank.ACE,
+    Rank.TWO,
+    Rank.THREE,
+    Rank.FOUR,
+    Rank.FIVE,
+    Rank.SIX,
+    Rank.SEVEN,
+    Rank.EIGHT,
+    Rank.NINE,
+    Rank.TEN,
+    Rank.JACK,
+    Rank.QUEEN,
+    Rank.KING,
+)
+
+# Order for hand display (Ace high: 2..K, then A)
+RANK_ORDER_DISPLAY_ACE_HIGH: tuple = (
+    Rank.TWO,
+    Rank.THREE,
+    Rank.FOUR,
+    Rank.FIVE,
+    Rank.SIX,
+    Rank.SEVEN,
+    Rank.EIGHT,
+    Rank.NINE,
+    Rank.TEN,
+    Rank.JACK,
+    Rank.QUEEN,
+    Rank.KING,
+    Rank.ACE,
+)
+
+
+def create_canastra_deck() -> list[Card]:
+    """Return a full Canastra deck (2 standard decks + 4 jokers) as list of Card."""
+    deck: list[Card] = []
+    for _ in range(4):
+        deck.append(Card(Rank.JOKER))
+    ranks = [r for r in Rank if r != Rank.JOKER]
+    suits = [Suit.CLUBS, Suit.DIAMONDS, Suit.HEARTS, Suit.SPADES]
+    for _ in range(2):
+        for rank in ranks:
+            for suit in suits:
+                deck.append(Card(rank, suit))
+    return deck
 
 
 class Card:
@@ -90,7 +141,7 @@ class Card:
         return f"{self.rank.value}{self.suit.value}"
 
     @classmethod
-    def from_string(cls, card_str: str) -> "Card":
+    def from_string(cls, card_str: str) -> Card:
         """Parse a card from string format (e.g., 'AS', '2C', 'Joker').
 
         Args:
