@@ -6,9 +6,12 @@ Or: python -m pytest tests/test_play_and_validate.py -v
 These tests run full games (AI vs AI or mixed) and after every turn assert
 that engine invariants hold: card count, valid melds, phase and index in range.
 Any violation fails the test with a clear message.
+
+AI tests patch AIConfig to use minimal rollouts so the suite runs in seconds.
 """
 
 import random
+from unittest import mock
 
 from card import create_canastra_deck
 from engine import Engine, TurnPhase
@@ -79,26 +82,29 @@ def _play_one_turn_random(engine: Engine, rng: random.Random) -> None:
         _apply_action(engine, action)
 
 
+@mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
+@mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUT_MAX_STEPS", 3)
 def test_play_full_game_all_ai_invariants_hold():
     """Run one full game with all players using play_ai_turn;
-    validate after every turn."""
+    validate after every turn. Uses minimal rollouts for speed."""
     engine = Engine(num_players=4)
     engine.start_new_game()
     turn = 0
-    max_turns = 350
+    max_turns = 120
     while not engine.game_over and turn < max_turns:
         play_ai_turn(engine)
         validate_engine_invariants(engine, after_turn=turn)
         turn += 1
-    # Game may not finish within limit (AI can be slow);
-    # we only require no invariant failure
     assert turn > 0
 
 
+@mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
+@mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUT_MAX_STEPS", 3)
 def test_play_multiple_games_mixed_bots_invariants_hold():
-    """Run several games (AI + random bots), validate after every turn."""
+    """Run several games (AI + random bots), validate after every turn.
+    Uses minimal rollouts for speed."""
     num_games = 3
-    max_turns_per_game = 250
+    max_turns_per_game = 80
     for seed in range(num_games):
         rng = random.Random(seed)
         engine = Engine(num_players=4)
@@ -134,3 +140,33 @@ def test_validate_engine_invariants_on_fresh_game():
     engine = Engine(num_players=4)
     engine.start_new_game()
     validate_engine_invariants(engine, after_turn=0)
+
+
+def test_engine_2_players_initialization():
+    """1v1 mode: engine with 2 players has 2 teams, 1 player per team."""
+    engine = Engine(num_players=2)
+    engine.start_new_game()
+    assert engine.num_players == 2
+    assert len(engine.players) == 2
+    assert engine.players[0].team == 0
+    assert engine.players[1].team == 1
+    for p in engine.players:
+        assert len(p.hand) == 11
+    assert len(engine.dead_hands) == 2
+    for team in (0, 1):
+        assert len(engine.dead_hands[team]) == 11
+    validate_engine_invariants(engine, after_turn=0)
+
+
+def test_play_2_player_game_invariants_hold():
+    """Run a 2-player (1v1) game with random moves; invariants must hold."""
+    rng = random.Random(42)
+    engine = Engine(num_players=2)
+    engine.start_new_game()
+    turn = 0
+    max_turns = 200
+    while not engine.game_over and turn < max_turns:
+        _play_one_turn_random(engine, rng)
+        validate_engine_invariants(engine, after_turn=turn)
+        turn += 1
+    assert turn > 0

@@ -2,7 +2,7 @@
 
 import streamlit as st
 
-from card import RANK_ORDER_SEQUENCE, Card, Rank, Suit
+from card import RANK_ORDER_SEQUENCE, SUIT_SYMBOLS, Card, Rank, Suit
 from engine import Engine, TurnPhase
 from game import GameType, counts_as_wildcard_in_sequence, is_wildcard
 
@@ -20,8 +20,7 @@ def get_suit_symbol(card: Card) -> str:
     """Get suit symbol."""
     if card.rank == Rank.JOKER:
         return "🃏"
-    suit_map = {Suit.HEARTS: "♥", Suit.DIAMONDS: "♦", Suit.CLUBS: "♣", Suit.SPADES: "♠"}
-    return suit_map.get(card.suit, "")
+    return SUIT_SYMBOLS.get(card.suit, "")
 
 
 def get_rank_display(card: Card) -> str:
@@ -36,6 +35,41 @@ def get_card_display_short(card: Card) -> str:
     if card.rank == Rank.JOKER:
         return "🃏"
     return f"{get_rank_display(card)}{get_suit_symbol(card)}"
+
+
+def card_html_static(
+    card: Card,
+    width_px: int = 44,
+    height_px: int = 66,
+    rotate_deg: int | None = None,
+) -> str:
+    """Return HTML for a single card (no interaction). Used for landing page
+    examples. rotate_deg=270 rotates the card (e.g. last card of a canastra).
+    Returns a single-line HTML fragment for st.markdown(unsafe_allow_html=True).
+    """
+    color = get_card_color(card)
+    symbol = get_suit_symbol(card)
+    rank = get_rank_display(card)
+    font_rank = 12 if width_px <= 44 else 16
+    font_suit = 18 if width_px <= 44 else 24
+    inner = (
+        f'<div style="display:inline-block;width:{width_px}px;height:{height_px}px;'
+        f'border:2px solid #333;border-radius:6px;background:white;'
+        f'box-shadow:0 2px 3px rgba(0,0,0,0.2);margin:3px;padding:3px;'
+        f'text-align:center;font-weight:bold;vertical-align:middle">'
+        f'<div style="color:{color};font-size:{font_rank}px;line-height:1.2">'
+        f'{rank}</div>'
+        f'<div style="color:{color};font-size:{font_suit}px;line-height:1.2">'
+        f'{symbol}</div>'
+        f"</div>"
+    )
+    if rotate_deg is not None:
+        inner = (
+            f'<div style="display:inline-block;transform:rotate({rotate_deg}deg);'
+            f'transform-origin:center center">'
+            f"{inner}</div>"
+        )
+    return inner
 
 
 def _update_selection(phase: TurnPhase, card: Card, selected: bool) -> None:
@@ -60,9 +94,11 @@ def display_card(
     engine: Engine,
     selectable: bool = True,
     highlight: bool = False,
+    rotate_deg: int | None = None,
 ):
     """Display a card with visual styling.
-    highlight=True for just-drawn card in hand."""
+    highlight=True for just-drawn card in hand.
+    rotate_deg=270 rotates the card (e.g. last card of a canastra)."""
     card_str = str(card)
     color = get_card_color(card)
     symbol = get_suit_symbol(card)
@@ -109,6 +145,11 @@ def display_card(
         </div>
     </div>
     """
+    if rotate_deg is not None:
+        card_html = (
+            f'<div style="display: inline-block; transform: rotate({rotate_deg}deg); '
+            f'transform-origin: center center;">{card_html}</div>'
+        )
 
     if selectable:
         checkbox_key = f"chk_{key}"
@@ -188,35 +229,35 @@ def display_player_panel(player, engine, is_current=False):
 
 
 def _sort_natural_cards_for_sequence(natural_cards: list, suit: Suit):
-    """Sort natural cards by sequence order; handle Ace after King."""
+    """Sort natural cards for display: Ace high (2..10,J,Q,K,A)."""
     natural_cards = list(natural_cards)
     natural_cards.sort(
         key=lambda c: (
             RANK_ORDER_SEQUENCE.index(c.rank)
-            if c.rank in RANK_ORDER_SEQUENCE else 99
+            if c.rank in RANK_ORDER_SEQUENCE
+            else 99
         ),
     )
-    ranks = [c.rank for c in natural_cards]
-    if Rank.ACE not in ranks or Rank.KING not in ranks:
-        return natural_cards
-    ace_cards = [c for c in natural_cards if c.rank == Rank.ACE]
-    king_cards = [c for c in natural_cards if c.rank == Rank.KING]
-    other_cards = [
-        c for c in natural_cards
-        if c.rank != Rank.ACE and c.rank != Rank.KING
-    ]
-    other_cards.sort(key=lambda c: RANK_ORDER_SEQUENCE.index(c.rank))
-    return other_cards + king_cards + ace_cards
+    return natural_cards
 
 
 def _place_wildcard_in_sequence_gap(natural_cards: list, wildcard: Card) -> list:
-    """Insert wildcard in first gap; else append."""
+    """Insert wildcard in its logical gap (Ace high: 2..10,J,Q,K,A).
+    E.g. 3,5 with Joker → 3,Joker,5."""
     if len(natural_cards) < 2:
         return natural_cards + [wildcard]
-    ranks = [RANK_ORDER_SEQUENCE.index(c.rank) for c in natural_cards]
-    for i in range(len(ranks) - 1):
-        if ranks[i + 1] - ranks[i] > 1:
+    rank_order = RANK_ORDER_SEQUENCE
+    indices = [
+        rank_order.index(c.rank) if c.rank in rank_order else 99
+        for c in natural_cards
+    ]
+    # Prefer gap between consecutive naturals (e.g. 3,5 → 3,wild,5)
+    for i in range(len(indices) - 1):
+        if indices[i + 1] - indices[i] > 1:
             return natural_cards[: i + 1] + [wildcard] + natural_cards[i + 1 :]
+    # Gap at start: e.g. natural cards start at J, run is 10-J-Q with wild as 10
+    if indices[0] > 0:
+        return [wildcard] + natural_cards
     return natural_cards + [wildcard]
 
 
@@ -237,6 +278,17 @@ def sort_game_cards(game):
         if not counts_as_wildcard_in_sequence(c, game.suit)
     ]
     natural_cards = _sort_natural_cards_for_sequence(natural_cards, game.suit)
+    # Display A-2-3 as A, 2, 3 (Ace as 1), not 2, 3, A
+    ranks_sorted = sorted(
+        [c.rank for c in natural_cards],
+        key=lambda r: RANK_ORDER_SEQUENCE.index(r),
+    )
+    if ranks_sorted == [Rank.TWO, Rank.THREE, Rank.ACE]:
+        natural_cards = [
+            c for r in [Rank.ACE, Rank.TWO, Rank.THREE]
+            for c in natural_cards
+            if c.rank == r
+        ]
 
     if wildcards:
         return _place_wildcard_in_sequence_gap(natural_cards, wildcards[0])
@@ -247,7 +299,37 @@ def sort_game_cards(game):
     ]
     rest = [c for c in natural_cards if c not in twos_of_suit]
     if len(twos_of_suit) == 1 and len(rest) >= 2:
-        return twos_of_suit + rest
+        # Place 2 of suit in its logical gap (e.g. 3,5,6 → 3,2,5,6 with 2 as 4)
+        rest_indices = [
+            RANK_ORDER_SEQUENCE.index(c.rank) if c.rank in RANK_ORDER_SEQUENCE else 99
+            for c in rest
+        ]
+        for i in range(len(rest_indices) - 1):
+            if rest_indices[i + 1] - rest_indices[i] > 1:
+                result = rest[: i + 1] + twos_of_suit + rest[i + 1 :]
+                result_ranks = sorted(
+                    [c.rank for c in result],
+                    key=lambda r: RANK_ORDER_SEQUENCE.index(r),
+                )
+                if result_ranks == [Rank.TWO, Rank.THREE, Rank.ACE]:
+                    result = [
+                        c for r in [Rank.ACE, Rank.TWO, Rank.THREE]
+                        for c in result
+                        if c.rank == r
+                    ]
+                return result
+        result = twos_of_suit + rest
+        result_ranks = sorted(
+            [c.rank for c in result],
+            key=lambda r: RANK_ORDER_SEQUENCE.index(r),
+        )
+        if result_ranks == [Rank.TWO, Rank.THREE, Rank.ACE]:
+            result = [
+                c for r in [Rank.ACE, Rank.TWO, Rank.THREE]
+                for c in result
+                if c.rank == r
+            ]
+        return result
     return natural_cards
 
 
@@ -261,49 +343,31 @@ def display_games_area(games, engine, area_id, selectable=False):
         )
 
         for i, game in enumerate(sorted_games):
-            # Wrap each meld (badge + cards) in a container
-            # so the badge sits right on its game
             with st.container():
-                pts = game.point_value
-                # Badge/label: tight to the cards below (minimal margin)
-                if game.is_canastra:
-                    if game.is_clean_canastra:
-                        label = "Canastra Limpa"
-                        badge_color = "#2d7d46"
-                    else:
-                        label = "Canastra Suja"
-                        badge_color = "#b8860b"
-                    st.markdown(
-                        f'<span style="'
-                        f'display: inline-block; '
-                        f'background: {badge_color}; '
-                        f'color: white; '
-                        f'padding: 2px 8px; '
-                        f'border-radius: 6px; '
-                        f'font-size: 0.75rem; '
-                        f'font-weight: bold; '
-                        f'margin-bottom: 2px;'
-                        f'">{label} · {pts} pts</span>',
-                        unsafe_allow_html=True,
-                    )
-                # Non-canastra melds: no point label (only canastra badge shown above)
-
-                # Sort cards in ascending order
                 sorted_cards = sort_game_cards(game)
+                num_cards = len(sorted_cards)
+                is_canastra = game.is_canastra
+
+                # Cards first; last card of a canastra is rotated 270deg
                 cards_per_row = 13
-                num_rows = (len(sorted_cards) + cards_per_row - 1) // cards_per_row
+                num_rows = (num_cards + cards_per_row - 1) // cards_per_row
                 for row in range(num_rows):
                     cols = st.columns(cards_per_row)
                     for col_idx in range(cards_per_row):
                         card_idx = row * cards_per_row + col_idx
-                        if card_idx < len(sorted_cards):
+                        if card_idx < num_cards:
+                            is_last = card_idx == num_cards - 1
                             with cols[col_idx]:
                                 display_card(
                                     sorted_cards[card_idx],
                                     f"{area_id}_game_{i}_card_{card_idx}",
                                     engine,
                                     selectable=selectable,
+                                    rotate_deg=(
+                                        270 if (is_canastra and is_last) else None
+                                    ),
                                 )
+
             # Space between melds (not inside the same meld)
             st.markdown(
                 "<div style='margin-bottom: 10px;'></div>",
@@ -317,6 +381,21 @@ def get_app_styles():
     """Get CSS styles for the application."""
     return """
     <style>
+    /* Ensure sidebar is visible and not collapsed */
+    section[data-testid="stSidebar"] {
+        width: 21rem !important;
+        min-width: 21rem !important;
+    }
+    section[data-testid="stSidebar"] > div {
+        width: 21rem !important;
+        min-width: 21rem !important;
+    }
+    /* Sidebar title bigger and even spacing below (match label-to-dropdown spacing) */
+    section[data-testid="stSidebar"] h2 {
+        font-size: 1.5rem !important;
+        margin-top: 0 !important;
+        margin-bottom: 0.5rem !important;
+    }
     .main .block-container {
         padding-top: 0.1rem !important;
         padding-bottom: 0.1rem !important;

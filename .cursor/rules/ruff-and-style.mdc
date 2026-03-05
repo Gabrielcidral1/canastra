@@ -1,0 +1,10 @@
+---
+description: Ruff compliance and style — break long lines; do not shorten messages
+alwaysApply: true
+---
+
+# Ruff and style
+
+- **Line length**: Keep lines ≤ 88 characters (ruff E501). Fix by **breaking into multiple lines** (parentheses, backslash, or new string/statement), not by shortening text or comments.
+- **Messages and user-facing strings**: Do not shorten or abbreviate messages, docstrings, or UI text to satisfy line length. Use line continuation or split across lines instead.
+- **After edits**: Ensure changes are ruff-compliant (e.g. run `uv run ruff check .` or pre-commit) so the project stays within the configured 88-char limit.

@@ -1,23 +1,19 @@
 """Engine for Canastra game."""
 
 import random
-from enum import Enum
 
 from card import Card, Suit, create_canastra_deck
-from game import Game, GameType
-
-
-class TurnPhase(Enum):
-    DRAW = "comprar"
-    LAY_DOWN = "baixar"
-    DISCARD = "descartar"
-    ENDED = "terminado"
-
-
-class KnockType(Enum):
-    DIRECT = "direta"
-    INDIRECT = "indireta"
-    FINAL = "final"
+from constants import (
+    DisplayNameTemplates,
+    EngineErrors,
+    EngineLog,
+    GameRules,
+    GameType,
+    KnockType,
+    TurnPhase,
+    UIText,
+)
+from game import Game
 
 
 class Player:
@@ -63,8 +59,10 @@ class Player:
 class Engine:
     """Main engine for Canastra game."""
 
-    def __init__(self, num_players: int = 4):
-        self.num_players = num_players
+    def __init__(self, num_players: int | None = None):
+        self.num_players = (
+            num_players if num_players is not None else GameRules.NUM_PLAYERS
+        )
         self.players: list[Player] = []
         self.stock: list[Card] = []
         self.discard_pile: list[Card] = []
@@ -77,10 +75,15 @@ class Engine:
             None  # receives morto at start of next turn (after indirect knock)
         )
 
-        num_players // 2
-        for i in range(num_players):
-            team = i // 2
-            self.players.append(Player(f"Jogador {i + 1}", team, is_human=(i == 0)))
+        for i in range(self.num_players):
+            team = i if self.num_players == 2 else i // 2
+            self.players.append(
+                Player(
+                    DisplayNameTemplates.PLAYER_N.format(n=i + 1),
+                    team,
+                    is_human=(i == 0),
+                )
+            )
             self.dead_hands[team] = []
 
     def _get_player_display_name(self, player: Player) -> str:
@@ -90,10 +93,10 @@ class Engine:
             return player.name
 
         if player == human_player:
-            return "Você"
+            return UIText.DisplayNames.YOU
 
         if player.team == human_player.team:
-            return "Parceiro"
+            return UIText.DisplayNames.PARTNER
 
         # Find opponent number based on their position in players list
         # Opponents are players from the other team, numbered by their order
@@ -104,8 +107,10 @@ class Engine:
         opponents.sort(key=lambda p: self.players.index(p))  # Sort by original position
 
         if player in opponents:
+            if self.num_players == 2:
+                return UIText.DisplayNames.OPPONENT
             opp_index = opponents.index(player)
-            return f"Oponente {opp_index + 1}"
+            return DisplayNameTemplates.OPPONENT_N.format(n=opp_index + 1)
 
         return player.name
 
@@ -141,14 +146,14 @@ class Engine:
             player.points = 0
             player.has_dead_hand = False
 
-        for _ in range(11):
+        for _ in range(GameRules.INITIAL_HAND_SIZE):
             for player in self.players:
                 if self.stock:
                     player.add_card(self.stock.pop())
 
         for team in self.dead_hands:
             self.dead_hands[team] = []
-            for _ in range(11):
+            for _ in range(GameRules.MORTO_SIZE):
                 if self.stock:
                     self.dead_hands[team].append(self.stock.pop())
 
@@ -159,7 +164,7 @@ class Engine:
         self.turn_phase = TurnPhase.DRAW
         starting_player = self.players[self.current_player_index]
         display_name = self._get_player_display_name(starting_player)
-        self._log(f"{display_name} começa o jogo")
+        self._log(EngineLog.GAME_STARTED.format(display_name=display_name))
 
     def get_current_player(self) -> Player:
         """Get the current player."""
@@ -168,7 +173,7 @@ class Engine:
     def draw_from_stock(self) -> str | None:
         """Draw a card from stock. Returns error message if invalid."""
         if self.turn_phase != TurnPhase.DRAW:
-            return "Só é possível comprar na fase de compra"
+            return EngineErrors.DRAW_ONLY_IN_DRAW_PHASE
 
         if not self.stock:
             self.game_over = True
@@ -180,16 +185,16 @@ class Engine:
         player.add_card(card)
         self.turn_phase = TurnPhase.LAY_DOWN
         display_name = self._get_player_display_name(player)
-        self._log(f"{display_name} comprou do monte")
+        self._log(EngineLog.DREW_FROM_STOCK.format(display_name=display_name))
         return None
 
     def draw_from_discard(self) -> str | None:
         """Draw all cards from discard pile. Returns error message if invalid."""
         if self.turn_phase != TurnPhase.DRAW:
-            return "Só é possível comprar na fase de compra"
+            return EngineErrors.DRAW_ONLY_IN_DRAW_PHASE
 
         if not self.discard_pile:
-            return "Lixo está vazio"
+            return EngineErrors.DISCARD_PILE_EMPTY
 
         player = self.get_current_player()
         for card in self.discard_pile:
@@ -198,28 +203,35 @@ class Engine:
         self.discard_pile = []
         self.turn_phase = TurnPhase.LAY_DOWN
         display_name = self._get_player_display_name(player)
-        self._log(f"{display_name} comprou do lixo")
+        self._log(EngineLog.DREW_FROM_DISCARD.format(display_name=display_name))
         return None
 
     def lay_down_sequence(self, suit: Suit, cards: list[Card]) -> str | None:
         """Lay down a sequence. Returns error message if invalid."""
         if self.turn_phase != TurnPhase.LAY_DOWN:
-            return "Só é possível baixar jogos na fase de baixar"
+            return EngineErrors.LAY_DOWN_ONLY_IN_LAY_PHASE
 
         player = self.get_current_player()
 
         for card in cards:
             if not player.remove_card(card):
-                return f"Carta {card} não está na mão"
+                return EngineLog.CARD_NOT_IN_HAND.format(card=card)
 
         try:
             game = Game(GameType.SEQUENCE, cards, suit)
             player.games.append(game)
             display_name = self._get_player_display_name(player)
             self._log(
-                f"{display_name} baixou sequência de {suit.value} com "
-                f"{len(cards)} cartas"
+                EngineLog.LAID_DOWN_SEQUENCE.format(
+                    display_name=display_name, suit=suit.value, n=len(cards)
+                )
             )
+            err = self._check_empty_hand_knock(player)
+            if err:
+                player.games.pop()
+                for card in cards:
+                    player.add_card(card)
+                return err
             return None
         except ValueError as e:
             for card in cards:
@@ -229,19 +241,29 @@ class Engine:
     def lay_down_triple(self, cards: list[Card]) -> str | None:
         """Lay down a triple. Returns error message if invalid."""
         if self.turn_phase != TurnPhase.LAY_DOWN:
-            return "Só é possível baixar jogos na fase de baixar"
+            return EngineErrors.LAY_DOWN_ONLY_IN_LAY_PHASE
 
         player = self.get_current_player()
 
         for card in cards:
             if not player.remove_card(card):
-                return f"Carta {card} não está na mão"
+                return EngineLog.CARD_NOT_IN_HAND.format(card=card)
 
         try:
             game = Game(GameType.TRIPLE, cards)
             player.games.append(game)
             display_name = self._get_player_display_name(player)
-            self._log(f"{display_name} baixou trinca com {len(cards)} cartas")
+            self._log(
+                EngineLog.LAID_DOWN_TRIPLE.format(
+                    display_name=display_name, n=len(cards)
+                )
+            )
+            err = self._check_empty_hand_knock(player)
+            if err:
+                player.games.pop()
+                for card in cards:
+                    player.add_card(card)
+                return err
             return None
         except ValueError as e:
             for card in cards:
@@ -253,33 +275,47 @@ class Engine:
     ) -> str | None:
         """Add card to an existing game. Returns error message if invalid."""
         if self.turn_phase != TurnPhase.LAY_DOWN:
-            return "Só é possível adicionar cartas na fase de baixar"
+            return EngineErrors.ADD_ONLY_IN_LAY_PHASE
 
         player = self.get_current_player()
 
         if target_player is None:
             target_player = player
         elif target_player.team != player.team:
-            return "Só é possível adicionar cartas aos jogos do seu time"
+            return EngineErrors.ADD_ONLY_OWN_TEAM
 
         if game_index < 0 or game_index >= len(target_player.games):
-            return "Índice de jogo inválido"
+            return EngineErrors.INVALID_GAME_INDEX
 
         if not player.remove_card(card):
-            return f"Carta {card} não está na mão"
+            return EngineLog.CARD_NOT_IN_HAND.format(card=card)
 
         try:
             game = target_player.games[game_index]
             game.add_card(card)
             player_display = self._get_player_display_name(player)
+            game_idx = game_index + 1
             if target_player == player:
-                self._log(f"{player_display} adicionou {card} ao jogo {game_index + 1}")
+                self._log(
+                    EngineLog.ADDED_TO_GAME.format(
+                        player_display=player_display, card=card, game_idx=game_idx
+                    )
+                )
             else:
                 target_display = self._get_player_display_name(target_player)
                 self._log(
-                    f"{player_display} adicionou {card} ao jogo {game_index + 1} "
-                    f"de {target_display}"
+                    EngineLog.ADDED_TO_GAME_OF.format(
+                        player_display=player_display,
+                        card=card,
+                        game_idx=game_idx,
+                        target_display=target_display,
+                    )
                 )
+            err = self._check_empty_hand_knock(player)
+            if err:
+                game.cards.pop()
+                player.add_card(card)
+                return err
             return None
         except ValueError as e:
             player.add_card(card)
@@ -288,16 +324,16 @@ class Engine:
     def discard(self, card: Card) -> str | None:
         """Discard a card. Returns error message if invalid."""
         if self.turn_phase != TurnPhase.DISCARD:
-            return "Só é possível descartar na fase de descartar"
+            return EngineErrors.DISCARD_ONLY_IN_DISCARD_PHASE
 
         player = self.get_current_player()
 
         if not player.remove_card(card):
-            return f"Carta {card} não está na mão"
+            return EngineLog.CARD_NOT_IN_HAND.format(card=card)
 
         self.discard_pile.append(card)
         display_name = self._get_player_display_name(player)
-        self._log(f"{display_name} descartou {card}")
+        self._log(EngineLog.DISCARDED.format(display_name=display_name, card=card))
 
         if len(player.hand) == 0:
             knock_type = self._determine_knock_type(player)
@@ -310,24 +346,23 @@ class Engine:
             if would_end_game and not self._team_has_clean_canastra(player):
                 player.add_card(card)
                 self.discard_pile.pop()
-                return (
-                    "Só é possível encerrar o jogo (bater) com canastra limpa "
-                    "(7+ cartas do mesmo naipe sem curingas)."
-                )
+                return EngineErrors.FINISH_NEEDS_CLEAN_CANASTRA
             self._process_knock(player, knock_type)
         else:
             self._next_turn()
 
         return None
 
+    def get_team_players(self, team: int) -> list[Player]:
+        """Return all players on the given team."""
+        return [p for p in self.players if p.team == team]
+
     def get_team_live_points(self, team: int) -> int:
         """Current points for a team: sum(jogos) - sum(mão)
         for all players on that team."""
         total_games = 0
         total_hand = 0
-        for p in self.players:
-            if p.team != team:
-                continue
+        for p in self.get_team_players(team):
             total_games += p.get_games_value()
             total_hand += p.get_hand_value()
         return total_games - total_hand
@@ -336,8 +371,7 @@ class Engine:
         """True if the player's team has at least one clean canastra on the table."""
         return any(
             g.is_clean_canastra
-            for p in self.players
-            if p.team == player.team
+            for p in self.get_team_players(player.team)
             for g in p.games
         )
 
@@ -351,6 +385,21 @@ class Engine:
 
         return KnockType.INDIRECT
 
+    def _check_empty_hand_knock(self, player: Player) -> str | None:
+        """If player hand is empty, validate and process knock (direct/indirect/final).
+        Returns error if knock would end game without clean canastra (caller must
+        undo)."""
+        if len(player.hand) != 0:
+            return None
+        knock_type = self._determine_knock_type(player)
+        would_end_game = knock_type == KnockType.FINAL or (
+            knock_type == KnockType.DIRECT and player.has_dead_hand
+        )
+        if would_end_game and not self._team_has_clean_canastra(player):
+            return EngineErrors.FINISH_NEEDS_CLEAN_CANASTRA
+        self._process_knock(player, knock_type)
+        return None
+
     def _process_knock(self, player: Player, knock_type: KnockType):
         """Process player's knock."""
         if knock_type == KnockType.DIRECT:
@@ -361,7 +410,7 @@ class Engine:
                     player.add_card(card)
                 self.dead_hands[team] = []
                 display_name = self._get_player_display_name(player)
-                self._log(f"{display_name} bateu DIRETA e pegou o morto")
+                self._log(EngineLog.DIRECT_KNOCK.format(display_name=display_name))
                 self.turn_phase = TurnPhase.LAY_DOWN
             else:
                 self.game_over = True
@@ -370,7 +419,7 @@ class Engine:
 
         elif knock_type == KnockType.INDIRECT:
             display_name = self._get_player_display_name(player)
-            self._log(f"{display_name} bateu INDIRETA")
+            self._log(EngineLog.INDIRECT_KNOCK.format(display_name=display_name))
             self.pending_morto_player_index = self.current_player_index
             self._next_turn()
             return
@@ -383,11 +432,26 @@ class Engine:
     def end_lay_down_phase(self):
         """End the lay down phase and go to discard."""
         if self.turn_phase == TurnPhase.LAY_DOWN:
-            self.turn_phase = TurnPhase.DISCARD
+            player = self.get_current_player()
+            if len(player.hand) == 0:
+                self._check_empty_hand_knock(player)
+            if self.turn_phase == TurnPhase.LAY_DOWN:
+                self.turn_phase = TurnPhase.DISCARD
+
+    # Clockwise turn order: Parceiro (1) → Oponente 2 (3) → Você (0) → Oponente 1 (2)
+    _CLOCKWISE_ORDER = (1, 3, 0, 2)
 
     def _next_turn(self):
-        """Move to next player."""
-        self.current_player_index = (self.current_player_index + 1) % self.num_players
+        """Move to next player (clockwise: Parceiro → Oponente 2 → Você → Oponente
+        1)."""
+        if self.num_players == 4:
+            order = self._CLOCKWISE_ORDER
+            pos = order.index(self.current_player_index)
+            self.current_player_index = order[(pos + 1) % 4]
+        else:
+            self.current_player_index = (
+                self.current_player_index + 1
+            ) % self.num_players
         self.turn_phase = TurnPhase.DRAW
         current_player = self.get_current_player()
         # If this player did an indirect knock, give them the morto (11 cards) now
@@ -402,9 +466,9 @@ class Engine:
             current_player.has_dead_hand = True
             self.pending_morto_player_index = None
             display_name = self._get_player_display_name(current_player)
-            self._log(f"{display_name} pegou o morto")
+            self._log(EngineLog.PICKED_UP_DEAD_HAND.format(display_name=display_name))
         display_name = self._get_player_display_name(current_player)
-        self._log(f"Vez de {display_name}")
+        self._log(EngineLog.TURN_OF.format(display_name=display_name))
 
         if self.turn_phase == TurnPhase.DRAW and not self.stock:
             self.game_over = True
@@ -412,31 +476,43 @@ class Engine:
 
     def _calculate_final_points(self):
         """Calculate final points for all teams."""
-        self._log("=== CONTAGEM DE PONTOS ===")
+        self._log(EngineLog.POINTS_COUNT_HEADER)
 
         for team in set(j.team for j in self.players):
-            team_players = [j for j in self.players if j.team == team]
+            team_players = self.get_team_players(team)
             team_points = 0
 
             has_final_knock = any(len(j.hand) == 0 for j in team_players)
             if has_final_knock:
-                team_points += 100
-                self._log(f"Time {team + 1}: +100 pontos (Batida Final)")
+                team_points += GameRules.FINAL_KNOCK_BONUS
+                self._log(
+                    EngineLog.TEAM_FINAL_KNOCK_BONUS.format(team=team + 1)
+                )
 
             for player in team_players:
                 games_points = player.get_games_value()
                 hand_points = player.get_hand_value()
                 team_points += games_points - hand_points
-                self._log(f"{player.name}: Jogos {games_points}, Mão -{hand_points}")
+                self._log(
+                    EngineLog.GAMES_AND_HAND.format(
+                        player_name=player.name,
+                        games_points=games_points,
+                        hand_points=hand_points,
+                    )
+                )
 
             if not any(j.has_dead_hand for j in team_players):
-                team_points -= 100
-                self._log(f"Time {team + 1}: -100 pontos (Não pegou o morto)")
+                team_points -= GameRules.DEAD_HAND_PENALTY
+                self._log(
+                    EngineLog.TEAM_NO_DEAD_HAND_PENALTY.format(team=team + 1)
+                )
 
             for player in team_players:
                 player.points = team_points
 
-            self._log(f"Time {team + 1} total: {team_points} pontos")
+            self._log(
+                EngineLog.TEAM_TOTAL_POINTS.format(team=team + 1, points=team_points)
+            )
 
     def copy(self) -> "Engine":
         """Return a deep copy of the engine for simulation (no message log)."""

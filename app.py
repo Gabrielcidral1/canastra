@@ -1,8 +1,11 @@
 """Streamlit interface for Canastra - Orchestrator."""
 
+import time
+
 import streamlit as st
 
-from card import Suit
+from card import SUIT_MAP, SUIT_NAME_MAP
+from constants import AppConfig, GameMode, GameRules, GameTypeStr, UIText
 from engine import Engine, TurnPhase
 from game import GameType, can_form_sequence, can_form_triple
 from game_helpers import (
@@ -11,6 +14,7 @@ from game_helpers import (
     organize_hand,
     play_ai_turn,
 )
+from rules_loader import RULES_BODY
 from ui_components import (
     display_card,
     display_games_area,
@@ -19,33 +23,56 @@ from ui_components import (
     get_card_display_short,
 )
 
-SUIT_MAP = {"C": Suit.CLUBS, "D": Suit.DIAMONDS, "H": Suit.HEARTS, "S": Suit.SPADES}
-SUIT_NAME_MAP = {"C": "Paus", "D": "Ouros", "H": "Copas", "S": "Espadas"}
+# Bot difficulty: 1=Fácil, 2=Médio, 3=Difícil. Harder = more MCTS rollouts.
+# delay_sec: pause after AI turn before showing next (0 when hard, turn already long).
+# Kept light so the app stays responsive; Médio was freezing on slower PCs.
+BOT_DIFFICULTY_PRESETS = {
+    1: {"rollouts": 1, "steps": 2, "delay_sec": 1},   # Fácil: very fast
+    2: {"rollouts": 2, "steps": 3, "delay_sec": 1},   # Médio: light
+    3: {"rollouts": 4, "steps": 5, "delay_sec": 0},   # Difícil: stronger
+}
+# Map sidebar label (from UIText.Sidebar) to preset key 1,2,3
+def _bot_difficulty_level():
+    label = st.session_state.get("bot_difficulty", UIText.Sidebar.BOT_DIFFICULTY_MEDIUM)
+    return {
+        UIText.Sidebar.BOT_DIFFICULTY_EASY: 1,
+        UIText.Sidebar.BOT_DIFFICULTY_MEDIUM: 2,
+        UIText.Sidebar.BOT_DIFFICULTY_HARD: 3,
+    }.get(label, 2)
+
 
 def initialize_session():
-    """Initialize session state."""
-    if "engine" not in st.session_state:
-        st.session_state.engine = Engine(num_players=4)
+    """Initialize session state. Engine is created after user chooses game mode."""
+    defaults = {
+        "game_mode": None,  # "1v1" or "doubles"; set when user clicks "Iniciar jogo"
+        "bot_difficulty": UIText.Sidebar.BOT_DIFFICULTY_MEDIUM,  # Fácil/Médio/Difícil
+        "selected_cards": [],
+        "selected_game": None,
+        "counterfactual_suggestion": None,  # (state_key, desc) when user asks
+        "confirm_new_game": False,
+        "show_rules": False,
+        "last_drawn_cards": [],
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+    # Create engine only after game mode is chosen
+    if st.session_state.game_mode is not None and "engine" not in st.session_state:
+        num_players = GameMode.num_players(st.session_state.game_mode)
+        st.session_state.engine = Engine(num_players=num_players)
         st.session_state.engine.start_new_game()
 
-    if "selected_cards" not in st.session_state:
-        st.session_state.selected_cards = []
 
-    if "selected_game" not in st.session_state:
-        st.session_state.selected_game = None
+def render_mode_selection():
+    """Delegate to landing page module (mode choice, card examples, rules)."""
+    from landing import render_mode_selection as _render_landing
+    _render_landing()
 
-    if "counterfactual_suggestion" not in st.session_state:
-        # (state_key, desc) when user asks
-        st.session_state.counterfactual_suggestion = None
 
-    if "confirm_new_game" not in st.session_state:
-        st.session_state.confirm_new_game = False
-
-    if "show_rules" not in st.session_state:
-        st.session_state.show_rules = False
-
-    if "last_drawn_cards" not in st.session_state:
-        st.session_state.last_drawn_cards = []
+def _human_team(engine: Engine) -> int:
+    """Team of the human player, so 'Nós' is always the human's team."""
+    return next((p.team for p in engine.players if p.is_human), 0)
 
 
 def render_game_over_message(
@@ -53,98 +80,73 @@ def render_game_over_message(
 ):
     """Render winner/tie message for game over (empty stock or canastra)."""
     winner_team, team_scores = engine.get_winner_message()
-    our_team = current_player.team
+    our_team = _human_team(engine)
     if winner_team is None:
         our_pts = team_scores.get(our_team, 0)
         other_pts = team_scores.get(1 - our_team, 0)
-        msg = f"Empate! Nós {our_pts} x Eles {other_pts} pontos."
+        msg = UIText.game_over_tie(our_pts, other_pts)
     else:
-        winner_name = "Nós" if winner_team == our_team else "Eles"
-        msg = (
-            f"🎉 Time {winner_name} venceu com "
-            f"{team_scores[winner_team]} pontos!"
+        winner_name = (
+            UIText.Teams.US if winner_team == our_team else UIText.Teams.THEM
         )
+        msg = UIText.game_over_won(winner_name, team_scores[winner_team])
     if in_sidebar:
         st.success(msg)
     else:
-        st.success(f"**Jogo encerrado.** {msg}")
+        st.success(UIText.GameOver.GAME_OVER_PREFIX + msg)
 
 
 def render_rules_expander():
     """Render the game rules in Brazilian Portuguese inside an expander."""
     expanded = st.session_state.get("show_rules", False)
-    with st.expander("📖 Regras do Jogo", expanded=expanded):
-        st.markdown("""
-### Definições
-
-- **JOGOS (sequências)**: Três ou mais cartas do mesmo naipe em sequência.
-  O Ás pode ficar antes do 2 ou depois do K.
-- **TRINCA**: Três ou mais cartas do mesmo número (Ás, 3 ou Rei). Pode ter curinga.
-- **CURINGA**: O 2 substitui qualquer carta. Cada jogo aceita no máximo um curinga.
-  O 2 do próprio naipe na sequência vale como carta natural.
-- **MONTE**: Cartas que sobraram após a distribuição.
-- **MORTO**: Duas pilhas de 11 cartas, uma por time. Quem esvaziar a mão primeiro
-  recebe o morto do seu time.
-- **LIXO**: Cartas descartadas, todas visíveis. Quem comprar do lixo
-  leva todas as cartas da pilha.
-- **CANASTRA**: Jogo com 7 ou mais cartas:
-  - **Canastra limpa**: Sem curinga (+200 pontos).
-  - **Canastra suja**: Com curinga (+100 pontos).
-
-### Ações na sua vez
-
-1. **COMPRAR**: Uma carta do **Monte** **ou** todas as cartas do **Lixo**.
-2. **BAIXAR**: Colocar um novo jogo na mesa (sequência ou trinca) e/ou
-   **adicionar** cartas a jogos já baixados do seu time.
-3. **DESCARTAR**: Colocar uma carta no Lixo.
-
-### Bater (esvaziar a mão)
-
-- **Batida direta**: A última carta foi **baixada**. Você recebe o morto na hora.
-- **Batida indireta**: A última carta foi **descartada**. Você recebe o morto
-  no início da sua próxima vez.
-- **Batida final**: Encerra a partida. Só pode bater final se o time tiver
-  uma **canastra limpa**.
-
-### Pontuação
-
-- Batida final: **+100**
-- Cada carta nos jogos: **10 pontos**
-- Canastra suja: **+100**
-- Canastra limpa: **+200**
-- Time que não pegou o morto: **-100**
-- Cartas que sobraram na mão: contam **negativo** no fim da partida.
-""")
+    with st.expander(UIText.Sidebar.RULES_EXPANDER, expanded=expanded):
+        st.markdown(RULES_BODY)
 
 
 def render_sidebar(engine: Engine, current_player):
-    """Render the sidebar: score and log first, rules expander at the bottom."""
-    st.header("📊 Placar")
+    """Render the sidebar: title, score and log first, rules expander at the bottom."""
+    difficulty_options = [
+        UIText.Sidebar.BOT_DIFFICULTY_EASY,
+        UIText.Sidebar.BOT_DIFFICULTY_MEDIUM,
+        UIText.Sidebar.BOT_DIFFICULTY_HARD,
+    ]
+    # Normalize: session may have old int; selectbox needs a string option
+    current = st.session_state.get(
+        "bot_difficulty", UIText.Sidebar.BOT_DIFFICULTY_MEDIUM
+    )
+    if current not in difficulty_options:
+        st.session_state.bot_difficulty = UIText.Sidebar.BOT_DIFFICULTY_MEDIUM
+        current = UIText.Sidebar.BOT_DIFFICULTY_MEDIUM
+    index = difficulty_options.index(current)
+
+    st.markdown(UIText.Sidebar.TITLE)
+    st.selectbox(
+        UIText.Sidebar.BOT_DIFFICULTY_LABEL,
+        options=difficulty_options,
+        index=index,
+        key="bot_difficulty",
+    )
+    st.divider()
+    st.header(UIText.Sidebar.SCORE_HEADER)
     for team in sorted(set(p.team for p in engine.players)):
-        team_players = [p for p in engine.players if p.team == team]
+        team_players = engine.get_team_players(team)
         if engine.game_over:
             points = team_players[0].points
         else:
             points = engine.get_team_live_points(team)
-            # -100 for team that hasn't picked up the morto yet
             if not any(p.has_dead_hand for p in team_players):
-                points -= 100
-        team_name = "Nós" if team == current_player.team else "Eles"
-        st.write(f"**{team_name}:** {points} pontos")
-
-    st.divider()
-    st.header("ℹ️ Informações")
-    st.write(f"**Jogador Atual**: {current_player.name}")
-    st.write(f"**Fase**: {engine.turn_phase.value.upper()}")
-    st.write(f"**Monte**: {len(engine.stock)} cartas")
-    st.write(f"**Lixo**: {len(engine.discard_pile)} cartas")
+                points -= GameRules.DEAD_HAND_PENALTY
+        team_name = (
+            UIText.Teams.US if team == _human_team(engine) else UIText.Teams.THEM
+        )
+        st.write(f"**{team_name}:** {points}{UIText.Sidebar.POINTS_SUFFIX}")
 
     if engine.game_over:
         render_game_over_message(engine, current_player, in_sidebar=True)
 
     st.divider()
-    st.header("📝 Log do Jogo")
-    for msg in engine.messages[-10:]:
+    st.header(UIText.Sidebar.LOG_HEADER)
+    for msg in engine.messages[-AppConfig.LAST_LOG_MESSAGES :]:
         st.write(msg)
 
     st.divider()
@@ -152,33 +154,43 @@ def render_sidebar(engine: Engine, current_player):
 
 
 def render_player_areas(engine: Engine, current_player):
-    """Render the top area with opponent and partner panels."""
-    opponent_team = 1 if current_player.team == 0 else 0
+    """Render the top area with opponent and partner panels.
+    'Our' team is always the human's team so labels stay correct."""
+    our_team = _human_team(engine)
+    opponent_team = 1 - our_team
     opponent_players = [p for p in engine.players if p.team == opponent_team]
-    your_team_players = [p for p in engine.players if p.team == current_player.team]
-    partner = [p for p in your_team_players if p != current_player]
+    your_team_players = [p for p in engine.players if p.team == our_team]
+    human = next((p for p in engine.players if p.is_human), None)
+    partner = [p for p in your_team_players if p != human]
     partner = partner[0] if partner else None
 
-    top_area = st.columns([2.5, 3, 2.5])
-
-    with top_area[0]:
-        st.markdown("### 👥 Oponente 1")
-        opp1 = opponent_players[0] if len(opponent_players) > 0 else None
-        if opp1:
-            display_player_panel(opp1, engine, is_current=(opp1 == current_player))
-
-    with top_area[1]:
-        if partner:
-            st.markdown("### 🤝 Parceiro")
-            display_player_panel(
-                partner, engine, is_current=(partner == current_player)
-            )
-
-    with top_area[2]:
-        st.markdown("### 👥 Oponente 2")
-        opp2 = opponent_players[1] if len(opponent_players) > 1 else None
-        if opp2:
-            display_player_panel(opp2, engine, is_current=(opp2 == current_player))
+    if engine.num_players == 2:
+        # 1v1: single opponent panel centered
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.markdown(UIText.PlayerAreas.OPPONENT)
+            opp = opponent_players[0] if opponent_players else None
+            if opp:
+                display_player_panel(opp, engine, is_current=(opp == current_player))
+    else:
+        # Doubles: Opponent 1 | Partner | Opponent 2
+        top_area = st.columns([2.5, 3, 2.5])
+        with top_area[0]:
+            st.markdown(UIText.PlayerAreas.OPPONENT_1)
+            opp1 = opponent_players[0] if len(opponent_players) > 0 else None
+            if opp1:
+                display_player_panel(opp1, engine, is_current=(opp1 == current_player))
+        with top_area[1]:
+            if partner:
+                st.markdown(UIText.PlayerAreas.PARTNER)
+                display_player_panel(
+                    partner, engine, is_current=(partner == current_player)
+                )
+        with top_area[2]:
+            st.markdown(UIText.PlayerAreas.OPPONENT_2)
+            opp2 = opponent_players[1] if len(opponent_players) > 1 else None
+            if opp2:
+                display_player_panel(opp2, engine, is_current=(opp2 == current_player))
 
     return opponent_players, your_team_players
 
@@ -191,8 +203,8 @@ def render_table_area(engine: Engine, opponent_players, your_team_players):
         table_cols = st.columns(2)
 
         with table_cols[0]:
-            st.markdown("#### 🃏 Monte")
-            st.write(f"**{len(engine.stock)} cartas**")
+            st.markdown(UIText.Table.STOCK_HEADING)
+            st.write(f"**{len(engine.stock)}{UIText.Sidebar.CARDS_SUFFIX}**")
             if engine.stock:
                 st.markdown(
                     """
@@ -217,9 +229,9 @@ def render_table_area(engine: Engine, opponent_players, your_team_players):
                 )
 
         with table_cols[1]:
-            st.markdown("#### 🗑️ Lixeira")
+            st.markdown(UIText.Table.DISCARD_HEADING)
             if engine.discard_pile:
-                st.write(f"**{len(engine.discard_pile)} cartas**")
+                st.write(f"**{len(engine.discard_pile)}{UIText.Sidebar.CARDS_SUFFIX}**")
                 cards_per_row = 7
                 num_rows = (
                     len(engine.discard_pile) + cards_per_row - 1
@@ -238,19 +250,19 @@ def render_table_area(engine: Engine, opponent_players, your_team_players):
                                     selectable=False,
                                 )
             else:
-                st.write("Vazio")
+                st.write(UIText.Table.EMPTY)
 
         meld_cols = st.columns(2)
 
         with meld_cols[0]:
-            st.markdown("#### 🃏 Jogos Baixados (Nós)")
+            st.markdown(UIText.Table.OUR_MELDS)
             your_team_games = []
             for player in your_team_players:
                 your_team_games.extend(player.games)
             display_games_area(your_team_games, engine, "your_team", selectable=False)
 
         with meld_cols[1]:
-            st.markdown("#### 🃏 Jogos Baixados (Eles)")
+            st.markdown(UIText.Table.THEIR_MELDS)
             opponent_games = []
             for player in opponent_players:
                 opponent_games.extend(player.games)
@@ -258,7 +270,12 @@ def render_table_area(engine: Engine, opponent_players, your_team_players):
 
 
 def render_player_hand(engine: Engine, current_player):
-    """Render the player's hand."""
+    """Render 'Sua Mão': always show the human player's hand (face-up) so they can
+    see their cards and count (11) even when it's an AI's turn."""
+    human_player = next((p for p in engine.players if p.is_human), None)
+    if not human_player:
+        return
+
     # Clear "just drawn" highlight once user selects something or phase changes
     if (
         st.session_state.get("selected_cards")
@@ -267,42 +284,45 @@ def render_player_hand(engine: Engine, current_player):
     ):
         st.session_state.last_drawn_cards = []
 
-    st.markdown("### 👤 Sua Mão")
-    if current_player.is_human:
-        hand = organize_hand(current_player.hand.copy())
-        last_drawn = st.session_state.get("last_drawn_cards") or []
-        if hand:
-            cards_per_row = 8
-            num_rows = (len(hand) + cards_per_row - 1) // cards_per_row
-            for row in range(num_rows):
-                cols = st.columns(cards_per_row)
-                for col_idx in range(cards_per_row):
-                    card_idx = row * cards_per_row + col_idx
-                    if card_idx < len(hand):
-                        card = hand[card_idx]
-                        unique_key = (
-                            f"hand_card_{card_idx}_{card.rank.value}_"
-                            f"{card.suit.value}_{id(card)}"
+    st.markdown(UIText.Hand.HEADING)
+    hand = organize_hand(human_player.hand.copy())
+    last_drawn = st.session_state.get("last_drawn_cards") or []
+    is_my_turn = current_player is human_player
+
+    if hand:
+        cards_per_row = 8
+        num_rows = (len(hand) + cards_per_row - 1) // cards_per_row
+        for row in range(num_rows):
+            cols = st.columns(cards_per_row)
+            for col_idx in range(cards_per_row):
+                card_idx = row * cards_per_row + col_idx
+                if card_idx < len(hand):
+                    card = hand[card_idx]
+                    unique_key = (
+                        f"hand_card_{card_idx}_{card.rank.value}_"
+                        f"{card.suit.value}_{id(card)}"
+                    )
+                    with cols[col_idx]:
+                        display_card(
+                            card,
+                            unique_key,
+                            engine,
+                            selectable=is_my_turn,
+                            highlight=card in last_drawn and is_my_turn,
                         )
-                        with cols[col_idx]:
-                            display_card(
-                                card,
-                                unique_key,
-                                engine,
-                                selectable=True,
-                                highlight=card in last_drawn,
-                            )
-        else:
-            st.write("Mão vazia")
     else:
-        display_player_panel(current_player, engine, is_current=True)
+        st.write(UIText.Hand.EMPTY)
 
 
 def render_draw_phase_actions(engine: Engine):
     """Render actions for the draw phase."""
     action_cols = st.columns(2)
     with action_cols[0]:
-        if st.button("🃏 Comprar do Monte", type="primary", use_container_width=True):
+        if st.button(
+            UIText.Actions.DRAW_STOCK,
+            type="primary",
+            use_container_width=True,
+        ):
             error = engine.draw_from_stock()
             if error:
                 st.error(error)
@@ -317,7 +337,7 @@ def render_draw_phase_actions(engine: Engine):
         if engine.discard_pile:
             n_discard = len(engine.discard_pile)
             if st.button(
-                f"🗑️ Comprar do Lixo ({n_discard} cartas)",
+                UIText.Actions.DRAW_DISCARD.format(n=n_discard),
                 use_container_width=True,
             ):
                 error = engine.draw_from_discard()
@@ -347,53 +367,57 @@ def _do_lay_and_rerun(engine: Engine, lay_fn, valid_check, invalid_msg: str) -> 
 
 def _render_lay_new_game(engine: Engine, selected_cards: list) -> None:
     """Render 'Baixar Novo Jogo' block (only when len(selected_cards) >= 3)."""
-    if len(selected_cards) < 3:
+    if len(selected_cards) < GameRules.MIN_MELD_CARDS:
         return
-    st.markdown("#### Baixar Novo Jogo")
+    st.markdown(UIText.LayDown.TITLE)
     game_type, detected_suit = detect_game_type(selected_cards)
     if game_type is None:
-        st.warning("⚠️ As cartas selecionadas não formam um jogo válido")
+        st.warning(UIText.LayDown.INVALID_CARDS)
         return
 
-    if game_type == "both":
+    if game_type == GameTypeStr.BOTH:
         option = st.radio(
-            "Tipo de jogo:",
-            ["Sequência", "Trinca"],
+            UIText.LayDown.GAME_TYPE_LABEL,
+            [UIText.LayDown.OPTION_SEQUENCE, UIText.LayDown.OPTION_TRIPLE],
             key="game_type",
             horizontal=True,
             index=0,
         )
-    elif game_type == "triple":
-        option = "Trinca"
+    elif game_type == GameTypeStr.TRIPLE:
+        option = UIText.LayDown.OPTION_TRIPLE
     else:
-        option = "Sequência"
+        option = UIText.LayDown.OPTION_SEQUENCE
 
-    if option == "Sequência":
-        suit_key = st.selectbox(
-            "Naipe:", ["C", "D", "H", "S"],
-            format_func=lambda x: SUIT_NAME_MAP[x],
-        )
-        suit = detected_suit if detected_suit else SUIT_MAP[suit_key]
-        if st.button("Baixar Sequência", type="primary"):
+    if option == UIText.LayDown.OPTION_SEQUENCE:
+        if detected_suit is not None:
+            suit = detected_suit
+        else:
+            suit_key = st.selectbox(
+                UIText.LayDown.SUIT_LABEL,
+                list(SUIT_MAP.keys()),
+                format_func=lambda x: SUIT_NAME_MAP[x],
+            )
+            suit = SUIT_MAP[suit_key]
+        if st.button(UIText.LayDown.BUTTON_SEQUENCE, type="primary"):
             _do_lay_and_rerun(
                 engine,
                 lambda: engine.lay_down_sequence(suit, selected_cards.copy()),
                 lambda: can_form_sequence(selected_cards, suit),
-                "Cartas não formam uma sequência válida",
+                UIText.LayDown.INVALID_SEQUENCE,
             )
-    elif option == "Trinca":
-        if st.button("Baixar Trinca", type="primary"):
+    elif option == UIText.LayDown.OPTION_TRIPLE:
+        if st.button(UIText.LayDown.BUTTON_TRIPLE, type="primary"):
             _do_lay_and_rerun(
                 engine,
                 lambda: engine.lay_down_triple(selected_cards.copy()),
                 lambda: can_form_triple(selected_cards),
-                "Cartas não formam uma trinca válida",
+                UIText.LayDown.INVALID_TRIPLE,
             )
 
 
 def _build_team_game_pairs(engine: Engine, current_player) -> list:
     """(game, owner) for team's games, sorted like display."""
-    your_team_players = [p for p in engine.players if p.team == current_player.team]
+    your_team_players = engine.get_team_players(current_player.team)
     pairs = [(g, p) for p in your_team_players for g in p.games]
     pairs.sort(
         key=lambda gp: (
@@ -414,21 +438,28 @@ def _render_add_to_game_buttons(engine: Engine, current_player, card) -> None:
         if not game.can_add(card):
             continue
         game_index_in_owner = owner.games.index(game)
-        type_str = "Sequência" if game.game_type == GameType.SEQUENCE else "Trinca"
-        suit_val = SUIT_NAME_MAP.get(game.suit.value, game.suit.value)
-        base_label = f"{type_str} de {suit_val}" if game.suit else type_str
+        type_str = (
+            UIText.LayDown.OPTION_SEQUENCE
+            if game.game_type == GameType.SEQUENCE
+            else UIText.LayDown.OPTION_TRIPLE
+        )
+        if game.suit is not None:
+            suit_val = SUIT_NAME_MAP.get(game.suit.value, game.suit.value)
+            base_label = f"{type_str} de {suit_val}"
+        else:
+            base_label = type_str
         valid_targets.append((
             owner, game_index_in_owner, f"{base_label} ({display_pos}º jogo)",
         ))
 
-    st.markdown("#### Adicionar a um jogo do time")
+    st.markdown(UIText.LayDown.ADD_TO_GAME_HEADING)
     if not valid_targets:
-        st.caption("Esta carta não pode ser adicionada a nenhum jogo do time.")
+        st.caption(UIText.LayDown.CARD_CANNOT_ADD)
         return
-    st.caption("Clique no jogo ao qual deseja adicionar a carta:")
+    st.caption(UIText.LayDown.CLICK_GAME_TO_ADD)
     for idx, (target_player, game_index_in_owner, label) in enumerate(valid_targets):
         if st.button(
-            f"➕ Adicionar à {label}",
+            UIText.LayDown.ADD_BUTTON_PREFIX + label,
             key=f"add_to_game_{idx}_{game_index_in_owner}_{target_player.name}",
             use_container_width=True,
         ):
@@ -444,15 +475,11 @@ def _render_add_to_game_buttons(engine: Engine, current_player, card) -> None:
 
 def render_lay_down_phase_actions(engine: Engine, current_player):
     """Render actions for the lay down phase."""
-    st.write("**Cartas selecionadas**")
+    st.write(UIText.LayDown.SELECTED_HEADING)
     selected_cards = st.session_state.selected_cards
     if selected_cards:
         num_selected = len(selected_cards)
-        st.write(
-            f"**{num_selected} carta selecionada:**"
-            if num_selected == 1
-            else f"**{num_selected} cartas selecionadas:**"
-        )
+        st.write(UIText.selected_count(num_selected))
         cards_per_row = 10
         num_rows = (num_selected + cards_per_row - 1) // cards_per_row
         for row in range(num_rows):
@@ -469,26 +496,26 @@ def render_lay_down_phase_actions(engine: Engine, current_player):
                             selectable=False,
                         )
     else:
-        st.info("💡 Clique nas cartas da sua mão para selecioná-las e baixar um jogo")
+        st.info(UIText.LayDown.HINT_SELECT)
 
     _render_lay_new_game(engine, selected_cards)
 
     if len(selected_cards) == 1:
         _render_add_to_game_buttons(engine, current_player, selected_cards[0])
 
-    st.info("💡 Você pode baixar mais jogos ou terminar a fase quando terminar.")
-    if st.button("✅ Terminar Fase de Baixar", use_container_width=True):
+    st.info(UIText.LayDown.HINT_FINISH)
+    if st.button(UIText.LayDown.BUTTON_END_PHASE, use_container_width=True):
         engine.end_lay_down_phase()
         st.rerun()
 
 
 def render_discard_phase_actions(engine: Engine):
     """Render actions for the discard phase."""
-    st.write("**Selecione uma carta para descartar:**")
+    st.write(UIText.Discard.PROMPT)
     if st.session_state.selected_cards:
         card = st.session_state.selected_cards[0]
         if st.button(
-            f"🗑️ Descartar {get_card_display_short(card)}",
+            UIText.Discard.BUTTON_PREFIX + get_card_display_short(card),
             type="primary",
             use_container_width=True,
         ):
@@ -499,7 +526,7 @@ def render_discard_phase_actions(engine: Engine):
                 st.session_state.selected_cards = []
                 st.rerun()
     else:
-        st.info("Selecione uma carta para descartar")
+        st.info(UIText.Discard.HINT)
 
 
 def render_game_actions(engine: Engine, current_player):
@@ -513,11 +540,11 @@ def render_game_actions(engine: Engine, current_player):
             render_discard_phase_actions(engine)
 
     if st.session_state.confirm_new_game:
-        st.warning("Tem certeza? O jogo atual será perdido.")
+        st.warning(UIText.Actions.CONFIRM_NEW_GAME)
         col1, col2 = st.columns(2)
         with col1:
             if st.button(
-                "Sim, novo jogo",
+                UIText.Actions.BUTTON_NEW_GAME_YES,
                 type="primary",
                 use_container_width=True,
                 key="confirm_new_game_yes",
@@ -529,7 +556,7 @@ def render_game_actions(engine: Engine, current_player):
                 st.rerun()
         with col2:
             if st.button(
-                "Cancelar",
+                UIText.Actions.BUTTON_CANCEL,
                 use_container_width=True,
                 key="confirm_new_game_no",
             ):
@@ -537,9 +564,9 @@ def render_game_actions(engine: Engine, current_player):
                 st.rerun()
     else:
         if st.button(
-            "🔄 Novo Jogo",
+            UIText.Actions.BUTTON_NEW_GAME,
             use_container_width=True,
-            help="Iniciar um novo jogo (o atual será perdido).",
+            help=UIText.Actions.NEW_GAME_HELP,
             key="btn_novo_jogo",
         ):
             st.session_state.confirm_new_game = True
@@ -548,26 +575,54 @@ def render_game_actions(engine: Engine, current_player):
 
 def main():
     """Main application function - orchestrates the UI."""
-    st.set_page_config(page_title="Canastra", layout="wide")
+    st.set_page_config(
+        page_title="Canastra",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
 
     initialize_session()
+
+    if "engine" not in st.session_state:
+        render_mode_selection()
+        return
 
     engine = st.session_state.engine
     current_player = engine.get_current_player()
 
+    # One AI turn per run so the user can see each opponent's move
+    just_played_name = None
     if not current_player.is_human and not engine.game_over:
-        play_ai_turn(engine)
-        st.rerun()
+        diff = _bot_difficulty_level()
+        preset = BOT_DIFFICULTY_PRESETS.get(diff, BOT_DIFFICULTY_PRESETS[2])
+        play_ai_turn(
+            engine,
+            rollouts=preset["rollouts"],
+            rollout_max_steps=preset["steps"],
+        )
+        n = len(engine.players)
+        just_played_idx = (engine.current_player_index - 1) % n
+        just_played_name = engine._get_player_display_name(
+            engine.players[just_played_idx]
+        )
+        current_player = engine.get_current_player()
+
+    # Render sidebar first so it always appears (Streamlit can hide it if rendered late)
+    with st.sidebar:
+        try:
+            render_sidebar(engine, current_player)
+        except Exception as e:
+            st.error("Sidebar error: " + str(e))
+            st.caption("Score, difficulty and log could not be loaded.")
 
     st.markdown(get_app_styles(), unsafe_allow_html=True)
-
-    st.markdown("### 🎴 Canastra")
 
     if engine.game_over:
         render_game_over_message(engine, current_player, in_sidebar=False)
 
-    with st.sidebar:
-        render_sidebar(engine, current_player)
+    # Show last move so user can follow each opponent's turn
+    if just_played_name is not None and engine.messages:
+        st.info(UIText.Actions.LAST_MOVE.format(msg=engine.messages[-1]))
 
     opponent_players, your_team_players = render_player_areas(engine, current_player)
 
@@ -577,7 +632,7 @@ def main():
 
     render_player_hand(engine, current_player)
 
-    st.markdown("### 🎮 Ações")
+    st.markdown(UIText.Actions.ACTIONS_HEADING)
 
     if not engine.game_over and current_player.is_human:
         state_key = (
@@ -590,17 +645,32 @@ def main():
         )
         cached = st.session_state.counterfactual_suggestion
         if cached is not None and cached[0] == state_key and cached[1]:
-            st.caption(f"🤖 O bot jogaria: **{cached[1]}**")
+            st.caption(UIText.Actions.BOT_WOULD_PLAY.format(desc=cached[1]))
         if st.button(
-            "🤖 Sugestão do bot",
-            help="Calcula o que o bot jogaria (pode demorar alguns segundos).",
+            UIText.Actions.BOT_SUGGESTION,
+            help=UIText.Actions.BOT_SUGGESTION_HELP,
         ):
-            with st.spinner("Calculando..."):
+            with st.spinner(UIText.Actions.SPINNER):
                 _action, cf_desc = get_counterfactual_action(engine)
             st.session_state.counterfactual_suggestion = (state_key, cf_desc or "")
             st.rerun()
 
     render_game_actions(engine, current_player)
+
+    # Auto-advance after a short pause so user sees each AI's move before next.
+    # Harder difficulty uses 0s delay (turn already took longer).
+    if not engine.game_over and not current_player.is_human:
+        diff = _bot_difficulty_level()
+        presets = BOT_DIFFICULTY_PRESETS
+        delay_sec = presets.get(diff, presets[2])["delay_sec"]
+        st.caption(
+            UIText.Actions.NEXT_PLAYER_SOON_BRIEF
+            if delay_sec == 0
+            else UIText.Actions.NEXT_PLAYER_SOON
+        )
+        if delay_sec > 0:
+            time.sleep(delay_sec)
+        st.rerun()
 
 
 if __name__ == "__main__":

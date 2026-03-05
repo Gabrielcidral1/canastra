@@ -1,18 +1,28 @@
 # Brazilian Canastra
 
-A Brazilian Canastra card game implemented in Python with a Streamlit interface.
+A Brazilian Canastra card game implemented in Python with a Streamlit interface. Play in 1v1 or doubles (4 players), with an AI opponent and optional bot suggestion.
 
 ## How to run
 
-```bash
-python main.py
-```
-
-Or run Streamlit directly:
+Using [uv](https://docs.astral.sh/uv/) (recommended):
 
 ```bash
-streamlit run app.py
+uv run streamlit run app.py
 ```
+
+Install uv if needed (`curl -LsSf https://astral.sh/uv/install.sh | sh`), then from the project root run the command above.
+
+---
+
+## Goal of the game
+
+Two teams compete to **score more points than the other**. You do that by:
+
+- **Forming melds** on the table: sequences (same suit, in order) or triples (same rank). Each card in a meld is worth points.
+- **Building canastras**: melds of 7+ cards earn big bonuses (clean +200, dirty +100).
+- **Going out** (“bater”): emptying your hand gives your team the “dead hand” (morto) and, with a clean canastra, lets you end the game and trigger final scoring.
+
+Points from your melds and bonuses are added; cards left in your hand at the end count **negative**. The team with the higher total wins.
 
 ---
 
@@ -20,98 +30,61 @@ streamlit run app.py
 
 ### Definitions
 
-- **MELDS**: Three or more cards of the same suit in sequence (Ace can be before 2 or after King).
-- **TRIPLE**: Three or more cards of the same rank (wildcards allowed).
-- **WILDCARD**: The 2 substitutes any card. Each meld may contain at most one wildcard.
-- **STOCK**: Remaining cards after the deal.
-- **DEAD HAND (morto)**: Two piles of 11 cards, one per team, given to the player who first empties their hand.
-- **DISCARD PILE**: Discarded cards, all visible.
+- **MELDS (sequências)**: Three or more cards of the same suit in sequence (Ace can be before 2 or after King).
+- **TRIPLE (trinca)**: Three or more cards of the same rank (Ace, 3, or King; wildcards allowed).
+- **WILDCARD (curinga)**: The 2 substitutes any card. Each meld may contain at most one wildcard. A 2 of the sequence suit counts as natural in a sequence.
+- **STOCK (monte)**: Remaining cards after the deal.
+- **DEAD HAND (morto)**: Two piles of 11 cards, one per team; the first player to empty their hand takes their team’s pile.
+- **DISCARD PILE (lixo)**: Discarded cards, all visible. You may draw the whole pile instead of one card from the stock.
 - **CANASTRA**: A meld of 7+ cards:
-  - **Clean**: No wildcards
-  - **Dirty**: With wildcard(s)
+  - **Clean**: No wildcards (+200).
+  - **Dirty**: With wildcard(s) (+100).
 
 ### Actions
 
-- **DRAW**: Draw one card from the stock or take the entire discard pile.
-- **LAY DOWN**: Place a new meld on the table.
-- **KNOCK**: When the hand is empty:
-  - **Direct**: Last card was laid; player takes the dead hand.
-  - **Indirect**: Last card was discarded; player takes the dead hand on their next turn.
-  - **Final**: Ends the game (requires a clean canastra to go out).
+- **DRAW**: One card from the stock or the entire discard pile.
+- **LAY DOWN**: Place new sequences or triples and/or add cards to your team’s existing melds.
+- **KNOCK (bater)** when your hand is empty:
+  - **Direct**: Last card was laid; you take the dead hand immediately.
+  - **Indirect**: Last card was discarded; you take the dead hand at the start of your next turn.
+  - **Final**: Ends the game (requires a clean canastra).
 
 ### Scoring
 
 - Final knock: +100
-- Per card in melds: 10 points each
+- Each card in melds: 10 points
 - Dirty canastra: +100
 - Clean canastra: +200
-- Never taking the dead hand: -100
-- Cards left in hand: count as negative points
+- Team never took the dead hand: -100
+- Cards left in hand at the end: count as negative points
 
 ---
 
 ## Code organization
 
-The project is split into layers: **data and rules** at the bottom, **game state and flow** in the middle, then **AI/simulation** and **UI**, and finally the **app** that ties everything together.
-
-### Architecture diagram
-
-```mermaid
-flowchart TB
-    subgraph foundation["Foundation"]
-        card["card.py\nCard, Rank, Suit\nDeck, rank order"]
-    end
-
-    subgraph rules["Rules"]
-        game["game.py\nGame (meld)\nValidation, can_form_*"]
-    end
-
-    subgraph core["Core"]
-        engine["engine.py\nEngine, Player\nTurns, phases, scoring"]
-    end
-
-    subgraph extensions["Extensions"]
-        helpers["game_helpers.py\nLegal actions, MCTS AI\nDeterminization, rollouts"]
-        ui["ui_components.py\nCards, panels, melds\nStreamlit widgets"]
-    end
-
-    subgraph entry["Entry points"]
-        app["app.py\nStreamlit app\nSession, layout, actions"]
-        bench["benchmark_bot.py\nBot comparison\nWin-rate tests"]
-    end
-
-    card --> game
-    card --> engine
-    game --> engine
-    engine --> helpers
-    game --> helpers
-    engine --> ui
-    game --> ui
-    helpers --> app
-    ui --> app
-    engine --> bench
-    helpers --> bench
-```
+The project is split into: **data and rules** (card, game), **game state and flow** (engine), **AI and simulation** (game_helpers), **UI** (ui_components, landing), and the **app** that wires everything together.
 
 ### Module roles
 
 | Module | Role |
 |--------|------|
-| **card.py** | Card representation (`Card`, `Rank`, `Suit`), full deck creation (`create_canastra_deck()`), and canonical rank order for sequences. No dependency on game or engine. |
-| **game.py** | Meld model and rules: `Game` (sequence or triple), validation, `can_form_sequence` / `can_form_triple`, and wildcard-in-sequence rule. Depends only on `card`. |
-| **engine.py** | Game state and flow: `Engine`, `Player`, turn phases (draw → lay down → discard), drawing, laying down, discarding, knock handling, and scoring. Depends on `card` and `game`. |
-| **game_helpers.py** | AI and simulation: legal and abstract action enumeration, applying actions on a clone, determinization (for hidden cards), MCTS/rollouts, “bot suggestion”, and helpers like `detect_game_type`, `find_valid_game`, `organize_hand`. Used by the app and by `benchmark_bot`. Depends on `card`, `engine`, and `game`. |
-| **ui_components.py** | Reusable Streamlit UI: card display, face-down cards, player panels, meld areas, sorting cards for display, app CSS. Depends on `card`, `engine`, and `game`. |
-| **app.py** | Streamlit application: session state, layout (sidebar, table, hand, actions), phase-specific rendering (draw, lay down, discard), and wiring to the engine and game helpers. Depends on `card`, `engine`, `game`, `game_helpers`, and `ui_components`. |
-| **main.py** | Entry point: runs `streamlit run app.py`. |
-| **benchmark_bot.py** | Benchmarks and bot comparison (e.g. control vs challenger, win rate). Depends on `engine` and `game_helpers`. |
+| **card.py** | Card representation (`Card`, `Rank`, `Suit`), deck creation (`create_canastra_deck()`), rank order for sequences. |
+| **game.py** | Meld model and rules: `Game` (sequence or triple), validation, `can_form_sequence` / `can_form_triple`, wildcard rules. |
+| **engine.py** | Game state and flow: `Engine`, `Player`, turn phases (draw → lay down → discard), knock handling, scoring. |
+| **game_helpers.py** | AI and simulation: legal/abstract actions, determinization, MCTS/rollouts, bot suggestion, `detect_game_type`, `find_valid_game`, `organize_hand`. |
+| **ui_components.py** | Streamlit UI: card display, player panels, meld areas, app CSS. |
+| **landing.py** | Landing page: mode selection (1v1 / doubles), rules block, card examples. |
+| **app.py** | Main Streamlit app: session state, layout, phase-specific rendering, wiring to engine and game_helpers. |
+| **constants.py** | Centralized constants: enums, game rules, AI config, UI/engine text. |
+| **rules_loader.py** | Loads rules text from `rules.md`. |
+| **benchmark_bot.py** | Bot benchmarks and comparison (e.g. control vs challenger). |
 
 ### Data flow (simplified)
 
 1. **User action** (e.g. “Draw from stock”) → **app.py** handles the widget and calls **engine** (e.g. `engine.draw_from_stock()`).
-2. **Engine** updates state (hands, stock, phase) and may log messages.
-3. **App** re-renders by reading `engine` and building the page with **ui_components** (cards, panels, melds).
-4. When it’s the AI’s turn, **app** calls **game_helpers.play_ai_turn(engine)**; the helper uses legal actions, MCTS/rollouts, and **engine** methods to perform the turn.
+2. **Engine** updates state (hands, stock, phase) and logs messages.
+3. **App** re-renders from **engine** and **ui_components** (cards, panels, melds).
+4. On the AI’s turn, **app** calls **game_helpers.play_ai_turn(engine)**; the helper uses legal actions, MCTS/rollouts, and the engine to perform the turn.
 
 ---
 
@@ -119,14 +92,13 @@ flowchart TB
 
 The Streamlit UI lets you:
 
-- View and select cards in your hand
-- Draw from the stock or the discard pile
-- Lay down sequences or triples
-- Add cards to existing melds
-- Discard a card
-- See the game log and other players’ status (e.g. card counts)
-
-
+- Choose **1v1** or **doubles** (4 players) on the landing page.
+- View and select cards in your hand.
+- Draw from the stock or the discard pile.
+- Lay down sequences or triples and add cards to existing melds.
+- Discard a card.
+- Use **“Sugestão do bot”** to see what the bot would play.
+- See the game log, scores, and other players’ status (e.g. card counts).
 
 ---
 
@@ -134,19 +106,22 @@ The Streamlit UI lets you:
 
 ```
 canastra/
-├── __init__.py          # Package exports (Card, Engine, Game, …)
-├── card.py              # Cards, deck, rank order
-├── game.py              # Melds and rules
+├── app.py               # Main Streamlit app
+├── landing.py           # Landing page (mode selection, rules)
 ├── engine.py            # Game state and flow
-├── game_helpers.py      # AI, legal actions, simulation
+├── game.py              # Melds and rules
+├── game_helpers.py       # AI, legal actions, simulation
+├── card.py              # Cards, deck, rank order
 ├── ui_components.py     # Streamlit UI building blocks
-├── app.py               # Streamlit app (orchestrator)
-├── main.py              # Entry point (runs streamlit run app.py)
-├── benchmark_bot.py     # Bot benchmarks and comparison
-├── requirements.txt    # Dependencies for deploy
+├── constants.py         # Enums, game rules, AI config, UI text
+├── rules_loader.py      # Load rules from rules.md
+├── rules.md             # Game rules (Portuguese)
+├── main.py              # Optional entry (runs streamlit run app.py)
+├── benchmark_bot.py     # Bot benchmarks
 ├── pyproject.toml       # Project and test config
 ├── README.md
 └── tests/
     ├── __init__.py
-    └── test_integration.py
+    ├── test_integration.py
+    └── test_play_and_validate.py
 ```

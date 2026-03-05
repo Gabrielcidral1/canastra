@@ -34,25 +34,31 @@ class Rank(Enum):
     JOKER = "Joker"  # distinct value so Enum has 14 members (13 ranks + joker)
 
 
-# Canonical order for sequence logic (A before 2, then 3..K)
-RANK_ORDER_SEQUENCE: tuple = (
-    Rank.ACE,
-    Rank.TWO,
-    Rank.THREE,
-    Rank.FOUR,
-    Rank.FIVE,
-    Rank.SIX,
-    Rank.SEVEN,
-    Rank.EIGHT,
-    Rank.NINE,
-    Rank.TEN,
-    Rank.JACK,
-    Rank.QUEEN,
-    Rank.KING,
-)
+# Canonical suit display names (Portuguese) and letter-based maps for UI.
+_SUIT_NAMES_PT = {
+    Suit.CLUBS: "Paus",
+    Suit.DIAMONDS: "Ouros",
+    Suit.HEARTS: "Copas",
+    Suit.SPADES: "Espadas",
+}
+SUIT_MAP = {"C": Suit.CLUBS, "D": Suit.DIAMONDS, "H": Suit.HEARTS, "S": Suit.SPADES}
+SUIT_NAME_MAP = {letter: _SUIT_NAMES_PT[s] for letter, s in SUIT_MAP.items()}
+# Suit -> Portuguese name (for game/card display).
+SUIT_NAMES_PT = _SUIT_NAMES_PT
 
-# Order for hand display (Ace high: 2..K, then A)
-RANK_ORDER_DISPLAY_ACE_HIGH: tuple = (
+# Joker display name in Portuguese (for card_display_pt in game.py).
+JOKER_DISPLAY_NAME_PT = "Curinga"
+
+# Suit -> Unicode symbol (for compact descriptions, e.g. bot suggestion).
+SUIT_SYMBOLS = {
+    Suit.CLUBS: "♣",
+    Suit.DIAMONDS: "♦",
+    Suit.HEARTS: "♥",
+    Suit.SPADES: "♠",
+}
+
+# Single canonical order: Ace high (2..K, A). Used for sequence logic and display.
+RANK_ORDER_SEQUENCE: tuple = (
     Rank.TWO,
     Rank.THREE,
     Rank.FOUR,

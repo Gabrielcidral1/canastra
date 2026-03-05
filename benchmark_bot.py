@@ -1,7 +1,6 @@
-"""Benchmark and measure bot quality: blunder scenarios, win rate vs random,
-and control vs challenger.
+"""Benchmark and measure bot quality: blunder scenarios and control vs challenger.
 
-Run with: python -m benchmark_bot [--games N] [--compare-games N]
+Run with: python -m benchmark_bot [--compare-games N]
 Or: python benchmark_bot.py
 
 Control vs Challenger:
@@ -12,49 +11,41 @@ Control vs Challenger:
 """
 
 import argparse
+import logging
+import math
 import random
 import sys
 import time
 from collections.abc import Callable
 
+from tqdm import tqdm
+
 from card import Card, Rank, Suit
+from constants import AIConfig, GameRules
 from engine import Engine, TurnPhase
 from game_helpers import (
-    AI_TURN_ROLLOUT_MAX_STEPS,
-    AI_TURN_ROLLOUTS,
-    _apply_action,
-    _get_legal_actions,
     get_counterfactual_action,
     play_ai_turn,
 )
 
+logger = logging.getLogger(__name__)
+
 # --- Control vs Challenger configs ---
-# Control: current production default (same as game_helpers constants).
+# Control = production default: early-game heuristic + avoid early trincas/bad discards.
 CONTROL_CONFIG = {
-    "rollouts": AI_TURN_ROLLOUTS,
-    "rollout_max_steps": AI_TURN_ROLLOUT_MAX_STEPS,
+    "rollouts": AIConfig.AI_TURN_ROLLOUTS,
+    "rollout_max_steps": AIConfig.AI_TURN_ROLLOUT_MAX_STEPS,
+    "discourage_early_triple": True,
+    "use_early_heuristic": True,
 }
 
-# Challenger: stronger search (more rollouts + longer rollouts)
-# + avoids early trincas and bad discards.
-# Must beat control on total points when running the benchmark
-# (--assert-challenger-wins).
+# Challenger: same as control until you try a new candidate (edit here for A/B tests).
 CHALLENGER_CONFIG = {
-    "rollouts": 10,
-    "rollout_max_steps": 6,
-    "discourage_early_trinca": True,
+    "rollouts": AIConfig.AI_TURN_ROLLOUTS,
+    "rollout_max_steps": AIConfig.AI_TURN_ROLLOUT_MAX_STEPS,
+    "discourage_early_triple": True,
+    "use_early_heuristic": True,
 }
-
-
-def _play_random_turn(engine: Engine, rng: random.Random) -> None:
-    """Play one full turn for the current player using random legal actions."""
-    idx = engine.current_player_index
-    while not engine.game_over and engine.current_player_index == idx:
-        actions = _get_legal_actions(engine)
-        if not actions:
-            break
-        action = rng.choice(actions)
-        _apply_action(engine, action)
 
 
 def make_bot(config: dict) -> Callable[[Engine], None]:
@@ -64,7 +55,8 @@ def make_bot(config: dict) -> Callable[[Engine], None]:
             engine,
             rollouts=config.get("rollouts"),
             rollout_max_steps=config.get("rollout_max_steps"),
-            discourage_early_trinca=config.get("discourage_early_trinca", False),
+            discourage_early_triple=config.get("discourage_early_triple", False),
+            use_early_heuristic=config.get("use_early_heuristic", False),
         )
     return play
 
@@ -75,41 +67,63 @@ def run_one_game_control_vs_challenger(
     challenger_team: int,
     control_bot: Callable[[Engine], None],
     challenger_bot: Callable[[Engine], None],
-    max_turns: int = 500,
-) -> tuple[int | None, dict[int, int], bool]:
+    max_turns: int = 200,
+) -> tuple[int | None, dict[int, int], bool, str | None]:
     """Run one game: control_team uses control_bot, challenger_team uses challenger_bot.
-    Returns (winner_team, team_scores, completed). team_scores keys are 0 and 1.
-    completed is False if the game threw or hit max_turns without ending."""
+    max_turns = max number of player-turns (one full turn per player). With ~42 cards
+    in stock and 4 players, a game finishes in ~40–45 full rounds
+    (~160–180 player-turns).
+    Returns (winner_team, team_scores, completed, incomplete_reason).
+    incomplete_reason is None if completed; else 'timeout' or 'error'."""
     try:
         random.seed(seed)
-        engine = Engine(num_players=4)
+        engine = Engine(num_players=GameRules.NUM_PLAYERS)
         engine.start_new_game()
         turn_count = 0
         while not engine.game_over and turn_count < max_turns:
-            current = engine.get_current_player()
-            if current.team == control_team:
-                control_bot(engine)
-            else:
-                challenger_bot(engine)
+            current_player_before = engine.current_player_index
+            while (
+                not engine.game_over
+                and engine.current_player_index == current_player_before
+            ):
+                current = engine.get_current_player()
+                if current.team == control_team:
+                    control_bot(engine)
+                else:
+                    challenger_bot(engine)
             turn_count += 1
         if not engine.game_over:
-            return (None, {}, False)
+            return (None, {}, False, "timeout")
         winner, team_scores = engine.get_winner_message()
-        return (winner, team_scores, True)
+        return (winner, team_scores, True, None)
     except Exception:
-        return (None, {}, False)
+        return (None, {}, False, "error")
+
+
+def _ci95_mean(samples: list[float]) -> tuple[float, float] | None:
+    """Return (lower, upper) 95% confidence interval for the mean, or None if n < 2."""
+    n = len(samples)
+    if n < 2:
+        return None
+    mean = sum(samples) / n
+    variance = sum((x - mean) ** 2 for x in samples) / (n - 1)
+    se = math.sqrt(variance / n)
+    half = 1.96 * se
+    return (mean - half, mean + half)
 
 
 def run_control_vs_challenger(
     num_games_per_side: int = 5,
     seed_base: int = 100,
+    max_turns: int = 200,
 ) -> dict:
     """Run control vs challenger head-to-head. Each side plays as team 0 in half
     the games and team 1 in the other half (for fairness). Results are in terms
     of control vs challenger, not team 0 vs team 1.
 
     Returns dict with: control_wins, challenger_wins, ties, total_points_control,
-    total_points_challenger, games_played, avg_point_diff (challenger - control).
+    total_points_challenger, games_played, games_requested, avg_point_diff,
+    point_diff_ci95 (tuple or None), incomplete_reasons (dict: timeout/error counts).
     """
     control_bot = make_bot(CONTROL_CONFIG)
     challenger_bot = make_bot(CHALLENGER_CONFIG)
@@ -118,51 +132,66 @@ def run_control_vs_challenger(
     ties = 0
     total_points_control = 0
     total_points_challenger = 0
+    point_diffs: list[float] = []
+    incomplete_reasons: dict[str, int] = {"timeout": 0, "error": 0}
     n = num_games_per_side
-    completed_count = 0
-    # Control as team 0, challenger as team 1
-    for i in range(n):
-        winner, scores, completed = run_one_game_control_vs_challenger(
-            seed=seed_base + i,
-            control_team=0,
-            challenger_team=1,
+
+    def process_result(
+        winner: int | None,
+        scores: dict,
+        completed: bool,
+        reason: str | None,
+        control_team: int,
+        challenger_team: int,
+    ) -> None:
+        nonlocal control_wins, challenger_wins, ties
+        nonlocal total_points_control, total_points_challenger, point_diffs
+        if not completed:
+            if reason:
+                incomplete_reasons[reason] = incomplete_reasons.get(reason, 0) + 1
+            return
+        if not scores:
+            return
+        total_points_control += scores.get(control_team, 0)
+        total_points_challenger += scores.get(challenger_team, 0)
+        point_diffs.append(
+            scores.get(challenger_team, 0) - scores.get(control_team, 0)
+        )
+        if winner is None:
+            ties += 1
+        elif winner == control_team:
+            control_wins += 1
+        else:
+            challenger_wins += 1
+
+    # Control as team 0, challenger as team 1; then swap seats (2*n games total)
+    game_configs = [
+        (seed_base + i, 0, 1) for i in range(n)
+    ] + [
+        (seed_base + 1000 + i, 1, 0) for i in range(n)
+    ]
+    for seed, ctrl_team, chal_team in tqdm(
+        game_configs,
+        desc="Control vs Challenger",
+        unit="game",
+    ):
+        winner, scores, completed, reason = run_one_game_control_vs_challenger(
+            seed=seed,
+            control_team=ctrl_team,
+            challenger_team=chal_team,
             control_bot=control_bot,
             challenger_bot=challenger_bot,
+            max_turns=max_turns,
         )
-        if completed and scores:
-            completed_count += 1
-            total_points_control += scores.get(0, 0)
-            total_points_challenger += scores.get(1, 0)
-            if winner is None:
-                ties += 1
-            elif winner == 0:
-                control_wins += 1
-            else:
-                challenger_wins += 1
-    # Challenger as team 0, control as team 1 (swap seats)
-    for i in range(n):
-        winner, scores, completed = run_one_game_control_vs_challenger(
-            seed=seed_base + 1000 + i,
-            control_team=1,
-            challenger_team=0,
-            control_bot=control_bot,
-            challenger_bot=challenger_bot,
-        )
-        if completed and scores:
-            completed_count += 1
-            total_points_control += scores.get(1, 0)
-            total_points_challenger += scores.get(0, 0)
-            if winner is None:
-                ties += 1
-            elif winner == 1:
-                control_wins += 1
-            else:
-                challenger_wins += 1
-    games_played = completed_count
+        process_result(winner, scores, completed, reason, ctrl_team, chal_team)
+
+    games_played = len(point_diffs)
     avg_diff = (
         (total_points_challenger - total_points_control) / games_played
         if games_played else 0
     )
+    point_diff_ci95 = _ci95_mean(point_diffs) if point_diffs else None
+
     return {
         "control_wins": control_wins,
         "challenger_wins": challenger_wins,
@@ -171,66 +200,16 @@ def run_control_vs_challenger(
         "total_points_challenger": total_points_challenger,
         "games_played": games_played,
         "games_requested": 2 * n,
-        "avg_point_diff": avg_diff,  # positive = challenger scores more on average
-    }
-
-
-def run_one_game_bot_vs_random(
-    seed: int,
-    bot_team: int = 0,
-    max_turns: int = 500,
-) -> tuple[int | None, dict[int, int]]:
-    """Run one game: bot_team uses play_ai_turn, other team uses random.
-    Returns (winner_team, team_scores)."""
-    try:
-        rng = random.Random(seed)
-        engine = Engine(num_players=4)
-        engine.start_new_game()
-        turn_count = 0
-        while not engine.game_over and turn_count < max_turns:
-            current = engine.get_current_player()
-            if current.team == bot_team:
-                play_ai_turn(engine)
-            else:
-                _play_random_turn(engine, rng)
-            turn_count += 1
-        if not engine.game_over:
-            return (None, {0: 0, 1: 0})
-        winner, team_scores = engine.get_winner_message()
-        return (winner, team_scores)
-    except Exception:
-        return (None, {0: 0, 1: 0})
-
-
-def benchmark_win_rate_vs_random(
-    num_games: int = 20,
-    bot_team: int = 0,
-    seed_base: int = 42,
-) -> dict:
-    """Run bot vs random for num_games. Return win rate and average point diff."""
-    wins = 0
-    total_point_diff = 0
-    for i in range(num_games):
-        winner, scores = run_one_game_bot_vs_random(
-            seed=seed_base + i, bot_team=bot_team,
-        )
-        if winner == bot_team:
-            wins += 1
-        if scores:
-            diff = scores.get(bot_team, 0) - scores.get(1 - bot_team, 0)
-            total_point_diff += diff
-    return {
-        "games": num_games,
-        "wins": wins,
-        "win_rate": wins / num_games if num_games else 0,
-        "avg_point_diff": total_point_diff / num_games if num_games else 0,
+        "avg_point_diff": avg_diff,
+        "point_diff_ci95": point_diff_ci95,
+        "incomplete_reasons": incomplete_reasons,
     }
 
 
 def _blunder_scenario_discard_joker() -> bool:
     """Scenario: discard phase, we have a joker and a low card. Good move:
     discard the low card, not the joker."""
-    engine = Engine(num_players=4)
+    engine = Engine(num_players=GameRules.NUM_PLAYERS)
     engine.start_new_game()
     engine.current_player_index = 0
     engine.turn_phase = TurnPhase.DISCARD
@@ -256,7 +235,7 @@ def _blunder_scenario_take_useful_discard() -> bool:
     Good move: take the pile."""
     from game import Game, GameType
 
-    engine = Engine(num_players=4)
+    engine = Engine(num_players=GameRules.NUM_PLAYERS)
     engine.start_new_game()
     engine.current_player_index = 0
     engine.turn_phase = TurnPhase.DRAW
@@ -281,7 +260,7 @@ def _blunder_scenario_take_useful_discard() -> bool:
 def _blunder_scenario_avoid_discard_matching_pile() -> bool:
     """Scenario: discard phase, pile top is 4♠. We have 4♦ and 7♥. Good:
     prefer discarding 7♥ (don't match pile)."""
-    engine = Engine(num_players=4)
+    engine = Engine(num_players=GameRules.NUM_PLAYERS)
     engine.start_new_game()
     engine.current_player_index = 0
     engine.turn_phase = TurnPhase.DISCARD
@@ -303,51 +282,65 @@ def _blunder_scenario_avoid_discard_matching_pile() -> bool:
 def run_blunder_scenarios() -> dict:
     """Run hand-crafted scenarios where a blunder would be a bad move.
     Return passed/total."""
+    scenarios = [
+        ("Don't discard joker when safe alternative", _blunder_scenario_discard_joker),
+        ("Take discard when we can use it", _blunder_scenario_take_useful_discard),
+        (
+            "Prefer discard that doesn't match pile top",
+            _blunder_scenario_avoid_discard_matching_pile,
+        ),
+    ]
     results = []
-    results.append((
-        "Don't discard joker when safe alternative",
-        _blunder_scenario_discard_joker(),
-    ))
-    results.append((
-        "Take discard when we can use it",
-        _blunder_scenario_take_useful_discard(),
-    ))
-    results.append((
-        "Prefer discard that doesn't match pile top",
-        _blunder_scenario_avoid_discard_matching_pile(),
-    ))
+    for name, fn in tqdm(scenarios, desc="Blunder scenarios", unit="scenario"):
+        results.append((name, fn()))
     passed = sum(1 for _, ok in results if ok)
     return {"passed": passed, "total": len(results), "details": results}
 
 
-def _run_assert_challenger_wins(num_games_per_side: int) -> None:
+def _run_assert_challenger_wins(
+    num_games_per_side: int,
+    max_turns: int = 200,
+) -> None:
     """Run control vs challenger and exit 1 if challenger is not better
     (more points or more wins)."""
-    print("Running control vs challenger (assert challenger wins)...")
-    result = run_control_vs_challenger(num_games_per_side=num_games_per_side)
+    logger.info("Running control vs challenger (assert challenger wins)...")
+    result = run_control_vs_challenger(
+        num_games_per_side=num_games_per_side,
+        max_turns=max_turns,
+    )
     if result["games_played"] < 2:
-        print(
-            f"ERROR: Only {result['games_played']} games completed (need at least 2). "
-            "Cannot assert challenger is better."
+        logger.error(
+            "Only %s games completed (need at least 2). "
+            "Cannot assert challenger is better.",
+            result["games_played"],
         )
         sys.exit(1)
     better_points = result["total_points_challenger"] > result["total_points_control"]
     better_wins = result["challenger_wins"] > result["control_wins"]
     if better_points or better_wins:
-        print(
-            f"OK: Challenger is better. Points: {result['total_points_challenger']} "
-            f"vs {result['total_points_control']} "
-            f"(avg diff {result['avg_point_diff']:+.0f}). "
-            f"Wins: Challenger {result['challenger_wins']}, "
-            f"Control {result['control_wins']}."
+        wins_msg = (
+            f"Game wins: Challenger {result['challenger_wins']}, "
+            f"Control {result['control_wins']}"
+        )
+        if result.get("ties", 0):
+            wins_msg += f", {result['ties']} tied game(s)"
+        logger.info(
+            "OK: Challenger is better. Total points: %s vs %s "
+            "(avg diff %+.0f). %s.",
+            result["total_points_challenger"],
+            result["total_points_control"],
+            result["avg_point_diff"],
+            wins_msg,
         )
         return
-    print(
-        f"FAIL: Challenger total points ({result['total_points_challenger']}) "
-        f"<= Control ({result['total_points_control']}) "
-        f"and wins ({result['challenger_wins']}) <= Control "
-        f"({result['control_wins']}). "
-        "Challenger must score more or win more games."
+    logger.error(
+        "FAIL: Challenger total points (%s) <= Control (%s) "
+        "and wins (%s) <= Control (%s). "
+        "Challenger must score more or win more games.",
+        result["total_points_challenger"],
+        result["total_points_control"],
+        result["challenger_wins"],
+        result["control_wins"],
     )
     sys.exit(1)
 
@@ -358,12 +351,6 @@ def main() -> None:
             "Benchmark bot quality: blunder scenarios, win rate vs random, "
             "control vs challenger."
         ),
-    )
-    parser.add_argument(
-        "--games",
-        type=int,
-        default=5,
-        help="Games for win-rate vs random (default 5)",
     )
     parser.add_argument(
         "--compare-games",
@@ -377,11 +364,6 @@ def main() -> None:
         help="Skip blunder scenarios (faster run)",
     )
     parser.add_argument(
-        "--skip-random",
-        action="store_true",
-        help="Skip win rate vs random (faster run)",
-    )
-    parser.add_argument(
         "--assert-challenger-wins",
         action="store_true",
         help=(
@@ -389,93 +371,141 @@ def main() -> None:
             "have more total points (guarantee challenger is better)"
         ),
     )
+    parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=200,
+        help=(
+            "Max player-turns per game before timeout (default 200). "
+            "One player-turn = one full turn (draw/lay/discard). "
+            "A normal game uses ~160–180 player-turns; timeouts may indicate a bug."
+        ),
+    )
     args = parser.parse_args()
 
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        stream=sys.stdout,
+    )
+
     if args.assert_challenger_wins:
-        _run_assert_challenger_wins(args.compare_games)
+        _run_assert_challenger_wins(
+            args.compare_games,
+            max_turns=getattr(args, "max_turns", 200),
+        )
         return
 
-    print("=== Bot benchmark ===\n")
+    logger.info("=== Bot benchmark ===\n")
 
     if not args.skip_blunder:
-        print("1. Blunder scenarios (Sugestão do bot should avoid bad moves)")
+        logger.info("1. Blunder scenarios (Sugestão do bot should avoid bad moves)")
         start = time.perf_counter()
         blunder = run_blunder_scenarios()
         elapsed = time.perf_counter() - start
-        print(f"   Passed: {blunder['passed']}/{blunder['total']} in {elapsed:.1f}s")
+        logger.info(
+            "   Passed: %s/%s in %.1fs",
+            blunder["passed"],
+            blunder["total"],
+            elapsed,
+        )
         for name, ok in blunder["details"]:
-            print(f"   - {name}: {'PASS' if ok else 'FAIL'}")
-        print()
+            logger.info("   - %s: %s", name, "PASS" if ok else "FAIL")
+        logger.info("")
 
-    if not args.skip_random:
-        print(f"2. Win rate vs random ({args.games} games, bot = team 0)")
-        start = time.perf_counter()
-        win_rate_result = benchmark_win_rate_vs_random(num_games=args.games)
-        elapsed = time.perf_counter() - start
-        print(
-            f"   Win rate: {win_rate_result['win_rate']:.0%} "
-            f"({win_rate_result['wins']}/{win_rate_result['games']})"
-        )
-        print(
-            f"   Avg point diff (bot - random): "
-            f"{win_rate_result['avg_point_diff']:.0f}"
-        )
-        print(f"   Time: {elapsed:.1f}s")
-        print()
-
-    print("3. Control vs Challenger (head-to-head, more points = better)")
+    logger.info("2. Control vs Challenger (head-to-head, more points = better)")
     ctrl = CONTROL_CONFIG
     chal = CHALLENGER_CONFIG
-    ctrl_r, ctrl_s, ctrl_t = (
+    ctrl_r, ctrl_s, ctrl_t, ctrl_h = (
         ctrl.get("rollouts"),
         ctrl.get("rollout_max_steps"),
-        ctrl.get("discourage_early_trinca", False),
+        ctrl.get("discourage_early_triple", False),
+        ctrl.get("use_early_heuristic", False),
     )
-    chal_r, chal_s, chal_t = (
+    chal_r, chal_s, chal_t, chal_h = (
         chal.get("rollouts"),
         chal.get("rollout_max_steps"),
-        chal.get("discourage_early_trinca", False),
+        chal.get("discourage_early_triple", False),
+        chal.get("use_early_heuristic", False),
     )
-    print(
-        f"   Control:   rollouts={ctrl_r}, rollout_max_steps={ctrl_s}, "
-        f"discourage_early_trinca={ctrl_t}"
+    logger.info(
+        "   Control:   rollouts=%s, rollout_max_steps=%s, "
+        "discourage_early_triple=%s, use_early_heuristic=%s",
+        ctrl_r, ctrl_s, ctrl_t, ctrl_h,
     )
-    print(
-        f"   Challenger: rollouts={chal_r}, rollout_max_steps={chal_s}, "
-        f"discourage_early_trinca={chal_t}"
+    logger.info(
+        "   Challenger: rollouts=%s, rollout_max_steps=%s, "
+        "discourage_early_triple=%s, use_early_heuristic=%s",
+        chal_r, chal_s, chal_t, chal_h,
     )
-    print(
-        f"   Games: {args.compare_games} per side "
-        f"(total {2 * args.compare_games} requested)"
+    max_turns = getattr(args, "max_turns", 200)
+    logger.info(
+        "   Games: %s per side (total %s requested), max_turns=%s",
+        args.compare_games,
+        2 * args.compare_games,
+        max_turns,
     )
     start = time.perf_counter()
-    cmp = run_control_vs_challenger(num_games_per_side=args.compare_games)
+    cmp = run_control_vs_challenger(
+        num_games_per_side=args.compare_games,
+        max_turns=max_turns,
+    )
     elapsed = time.perf_counter() - start
     if cmp["games_played"] < cmp["games_requested"]:
-        print(
-            f"   Completed: {cmp['games_played']}/{cmp['games_requested']} "
-            "(some games errored or timed out)"
-        )
-    print(f"   Results ({cmp['games_played']} games):")
-    print(f"      Control wins:   {cmp['control_wins']}")
-    print(f"      Challenger wins: {cmp['challenger_wins']}")
-    print(f"      Ties:           {cmp['ties']}")
-    print(f"      Total points — Control:   {cmp['total_points_control']}")
-    print(f"      Total points — Challenger: {cmp['total_points_challenger']}")
-    print(f"      Avg point diff (Challenger − Control): {cmp['avg_point_diff']:+.0f}")
-    if cmp["avg_point_diff"] > 0:
-        print("   → Challenger is ahead by points (candidate improvement).")
-    elif cmp["avg_point_diff"] < 0:
-        print("   → Control is ahead by points (challenger is worse).")
+        reasons = cmp.get("incomplete_reasons") or {}
+        timeout = reasons.get("timeout", 0)
+        err = reasons.get("error", 0)
+        parts = [f"Completed: {cmp['games_played']}/{cmp['games_requested']}"]
+        if timeout:
+            parts.append(
+                f"{timeout} timeout (hit max_turns={max_turns} player-turns; "
+                "games normally finish in ~160–180 player-turns)"
+            )
+        if err:
+            parts.append(f"{err} error(s)")
+        logger.info("   %s", "; ".join(parts))
+    logger.info("   Results (%s games):", cmp["games_played"])
+    logger.info("      Games won by Control:   %s", cmp["control_wins"])
+    logger.info("      Games won by Challenger: %s", cmp["challenger_wins"])
+    logger.info("      Games tied (equal score): %s", cmp["ties"])
+    logger.info("      Total points — Control:   %s", cmp["total_points_control"])
+    logger.info("      Total points — Challenger: %s", cmp["total_points_challenger"])
+    logger.info(
+        "      Avg point diff (Challenger − Control): %+.0f",
+        cmp["avg_point_diff"],
+    )
+    ci = cmp.get("point_diff_ci95")
+    if ci and cmp["games_played"] >= 2:
+        logger.info("      95%% CI (mean point diff): [%+.0f, %+.0f]", ci[0], ci[1])
+        if ci[0] > 0:
+            logger.info(
+                "   → Challenger ahead; 95%% CI entirely above 0 (significant)."
+            )
+        elif ci[1] < 0:
+            logger.info("   → Control ahead; 95%% CI entirely below 0 (significant).")
+        else:
+            logger.info(
+                "   → CI includes 0; difference may not be significant "
+                "(run more games)."
+            )
     else:
-        print("   → Tie on average points.")
-    print(f"   Time: {elapsed:.1f}s")
-    print()
-    print(
+        if cmp["avg_point_diff"] > 0:
+            logger.info(
+                "   → Challenger is ahead by points (candidate improvement)."
+            )
+        elif cmp["avg_point_diff"] < 0:
+            logger.info("   → Control is ahead by points (challenger is worse).")
+        else:
+            logger.info("   → Tie on average points.")
+    logger.info("   Time: %.1fs", elapsed)
+    logger.info("")
+    logger.info(
         "To test an improvement: set CHALLENGER_CONFIG in benchmark_bot.py "
         "and re-run. Challenger should have more wins and/or more total points."
     )
-    print("Use --skip-blunder --skip-random to run only control vs challenger.")
+    logger.info(
+        "Use --skip-blunder to run only control vs challenger."
+    )
 
 
 if __name__ == "__main__":

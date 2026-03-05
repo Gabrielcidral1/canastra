@@ -15,12 +15,19 @@ from game import Game, GameType, can_form_sequence, can_form_triple
 from game_helpers import (
     _apply_action,
     _determinize,
+    _discard_connector_isolated_bonus,
     _discard_danger,
-    _early_trinca_penalty,
+    _discard_duplicate_bonus,
+    _discard_far_or_adjacent_in_suit_bonus,
+    _discard_singleton_suit_bonus,
+    _discard_useful_card_penalty,
     _get_legal_actions,
     _is_early_game,
     get_counterfactual_action,
     play_ai_turn,
+)
+from game_helpers import (
+    _early_triple_penalty as _early_trinca_penalty,
 )
 
 
@@ -423,7 +430,7 @@ class TestAddingToGames:
         engine.start_new_game()
 
         # Get players from the same team
-        team_0_players = [p for p in engine.players if p.team == 0]
+        team_0_players = engine.get_team_players(0)
         player = team_0_players[0]
         partner = team_0_players[1]
 
@@ -687,19 +694,22 @@ class TestTurnProgression:
     """Test turn progression and phase transitions."""
 
     def test_turn_progression(self):
-        """Test that turns progress correctly."""
+        """Test that turns progress correctly (clockwise order)."""
         engine = Engine(num_players=4)
         engine.start_new_game()
 
         initial_player_index = engine.current_player_index
+        order = Engine._CLOCKWISE_ORDER
+        expected_next = order[(order.index(initial_player_index) + 1) % 4]
 
         # Complete a full turn
         engine.draw_from_stock()
         engine.end_lay_down_phase()
         engine.discard(engine.get_current_player().hand[0])
 
-        # Should move to next player
-        assert engine.current_player_index == (initial_player_index + 1) % 4
+        # Should move to next player (clockwise: Parceiro → Oponente 2 →
+        # Você → Oponente 1)
+        assert engine.current_player_index == expected_next
         assert engine.turn_phase == TurnPhase.DRAW
 
     def test_end_lay_down_phase(self):
@@ -915,7 +925,7 @@ class TestPointCalculation:
         engine.start_new_game()
 
         # Get players from the same team
-        team_0_players = [p for p in engine.players if p.team == 0]
+        team_0_players = engine.get_team_players(0)
         player = team_0_players[0]
         partner = team_0_players[1]
 
@@ -950,8 +960,8 @@ class TestPointCalculation:
         engine = Engine(num_players=4)
         engine.start_new_game()
 
-        team_0_players = [p for p in engine.players if p.team == 0]
-        team_1_players = [p for p in engine.players if p.team == 1]
+        team_0_players = engine.get_team_players(0)
+        team_1_players = engine.get_team_players(1)
         player0 = team_0_players[0]
         player1 = team_0_players[1]
 
@@ -1041,9 +1051,9 @@ class TestCompleteGameFlow:
         engine.discard(card_to_discard)
         assert len(player.hand) == initial_hand_size
         assert engine.turn_phase == TurnPhase.DRAW
-        assert (
-            engine.current_player_index == (index_before + 1) % 4
-        )  # Next player's turn
+        order = Engine._CLOCKWISE_ORDER
+        expected_next = order[(order.index(index_before) + 1) % 4]
+        assert engine.current_player_index == expected_next  # Clockwise next
 
     def test_lay_down_and_add_to_game(self):
         """Test laying down a game and adding cards to it."""
@@ -1123,6 +1133,22 @@ class TestAIISMCTS:
         assert danger_joker == 1.0
         assert danger_low == 0.0
 
+    def test_discard_danger_two_is_high(self):
+        """Discarding a 2 (wildcard) is rated dangerous so opponent and
+        suggestion avoid it."""
+        engine = Engine(num_players=4)
+        engine.start_new_game()
+        engine.current_player_index = 0
+        engine.turn_phase = TurnPhase.DISCARD
+        engine.players[0].hand = [
+            Card(Rank.TWO, Suit.CLUBS),
+            Card(Rank.FOUR, Suit.SPADES),
+        ]
+        danger_two = _discard_danger(engine, ("discard", 0))
+        danger_low = _discard_danger(engine, ("discard", 1))
+        assert danger_two >= 0.8
+        assert danger_low == 0.0
+
     def test_discard_danger_matching_pile_top(self):
         """Discarding a card that matches the pile top is rated
         more dangerous than a non-match."""
@@ -1167,7 +1193,126 @@ class TestAIISMCTS:
         assert danger_discard_addable >= 0.9
         assert danger_discard_other == 0.0
 
-    def test_early_trinca_penalty(self):
+    def test_discard_connector_isolated_bonus(self):
+        """Connector in 3+ same suit gets penalty; connector in 2-or-less suit gets 0;
+        isolated (J,Q,K,A) get bonus."""
+        engine = Engine(num_players=4)
+        engine.start_new_game()
+        engine.current_player_index = 0
+        engine.turn_phase = TurnPhase.DISCARD
+        # Connector 9♦ in a 3-diamond group -> penalty
+        engine.players[0].hand = [
+            Card(Rank.NINE, Suit.DIAMONDS),
+            Card(Rank.EIGHT, Suit.DIAMONDS),
+            Card(Rank.SEVEN, Suit.DIAMONDS),
+            Card(Rank.QUEEN, Suit.CLUBS),
+        ]
+        assert _discard_connector_isolated_bonus(engine, ("discard", 0)) == -12.0
+        assert _discard_connector_isolated_bonus(engine, ("discard", 3)) == 12.0
+        # 7♣ with only 2 clubs -> no connector penalty (OK to discard)
+        engine.players[0].hand = [
+            Card(Rank.SEVEN, Suit.CLUBS),
+            Card(Rank.KING, Suit.CLUBS),
+            Card(Rank.JACK, Suit.HEARTS),
+            Card(Rank.KING, Suit.HEARTS),
+            Card(Rank.TEN, Suit.HEARTS),
+        ]
+        assert _discard_connector_isolated_bonus(engine, ("discard", 0)) == 0.0
+        assert _discard_connector_isolated_bonus(engine, ("discard", 2)) == 12.0
+
+    def test_discard_useful_card_penalty(self):
+        """Discarding a card that is part of a potential meld in hand gets a penalty
+        (e.g. J♥ when we have 6♥, 9♥, J♥, K♥ — same-suit group)."""
+        engine = Engine(num_players=4)
+        engine.start_new_game()
+        engine.current_player_index = 0
+        engine.turn_phase = TurnPhase.DISCARD
+        # Hand: 6♥, 9♥, J♥, K♥ (4 hearts) + one other card.
+        # Discarding J♥ (index 2) is bad.
+        engine.players[0].hand = [
+            Card(Rank.SIX, Suit.HEARTS),
+            Card(Rank.NINE, Suit.HEARTS),
+            Card(Rank.JACK, Suit.HEARTS),
+            Card(Rank.KING, Suit.HEARTS),
+            Card(Rank.FOUR, Suit.CLUBS),
+        ]
+        penalty_jack_hearts = _discard_useful_card_penalty(engine, ("discard", 2))
+        assert penalty_jack_hearts >= 22.0
+        # Discarding 4♣ (index 4) is not part of a 3+ same-suit or 2+ same-rank group
+        penalty_four_clubs = _discard_useful_card_penalty(engine, ("discard", 4))
+        assert penalty_four_clubs == 0.0
+
+    def test_discard_duplicate_bonus(self):
+        """Discarding a card we have a duplicate of (e.g. one 8♥ when we have two)
+        gets a bonus so we prefer it over discarding a singleton like 4♣."""
+        engine = Engine(num_players=4)
+        engine.start_new_game()
+        engine.current_player_index = 0
+        engine.turn_phase = TurnPhase.DISCARD
+        engine.players[0].hand = [
+            Card(Rank.FOUR, Suit.CLUBS),
+            Card(Rank.EIGHT, Suit.HEARTS),
+            Card(Rank.EIGHT, Suit.HEARTS),
+        ]
+        bonus_discard_8h = _discard_duplicate_bonus(engine, ("discard", 1))
+        assert bonus_discard_8h >= 18.0
+        bonus_discard_4c = _discard_duplicate_bonus(engine, ("discard", 0))
+        assert bonus_discard_4c == 0.0
+
+        # Wildcards (2, Joker) must never get the duplicate bonus—too valuable
+        # to discard
+        engine.players[0].hand = [
+            Card(Rank.TWO, Suit.SPADES),
+            Card(Rank.TWO, Suit.SPADES),
+        ]
+        assert _discard_duplicate_bonus(engine, ("discard", 0)) == 0.0
+
+    def test_discard_singleton_suit_bonus(self):
+        """Discarding the only card of a suit in hand (e.g. K♦ when we have many spades)
+        gets a bonus so we prefer it over discarding from a run-heavy suit like 6♠."""
+        engine = Engine(num_players=4)
+        engine.start_new_game()
+        engine.current_player_index = 0
+        engine.turn_phase = TurnPhase.DISCARD
+        engine.players[0].hand = [
+            Card(Rank.SIX, Suit.SPADES),
+            Card(Rank.EIGHT, Suit.SPADES),
+            Card(Rank.KING, Suit.DIAMONDS),
+        ]
+        bonus_k_diamonds = _discard_singleton_suit_bonus(engine, ("discard", 2))
+        assert bonus_k_diamonds >= 16.0
+        bonus_6_spades = _discard_singleton_suit_bonus(engine, ("discard", 0))
+        assert bonus_6_spades == 0.0
+
+    def test_discard_far_or_adjacent_in_suit_bonus(self):
+        """Prefer discarding A♣ when 9♣ is too far to connect; keep K♠ when
+        it's adjacent to J♠ (run potential)."""
+        engine = Engine(num_players=4)
+        engine.start_new_game()
+        engine.current_player_index = 0
+        engine.turn_phase = TurnPhase.DISCARD
+        # Hand: 3♣, 6♣, 9♣, A♣ — A is far from 9 in sequence order
+        engine.players[0].hand = [
+            Card(Rank.THREE, Suit.CLUBS),
+            Card(Rank.SIX, Suit.CLUBS),
+            Card(Rank.NINE, Suit.CLUBS),
+            Card(Rank.ACE, Suit.CLUBS),
+        ]
+        bonus_a_clubs = _discard_far_or_adjacent_in_suit_bonus(
+            engine, ("discard", 3)
+        )
+        assert bonus_a_clubs >= 14.0
+        # J♠, K♠ — K is adjacent to J (distance 1), prefer not to discard
+        engine.players[0].hand = [
+            Card(Rank.JACK, Suit.SPADES),
+            Card(Rank.KING, Suit.SPADES),
+        ]
+        bonus_k_spades = _discard_far_or_adjacent_in_suit_bonus(
+            engine, ("discard", 1)
+        )
+        assert bonus_k_spades <= -14.0
+
+    def test_early_triple_penalty(self):
         """Laying a triple in early game gets a penalty; with wildcards
         the penalty is higher."""
         engine = Engine(num_players=4)
@@ -1292,7 +1437,7 @@ class TestAIISMCTS:
         assert [(c.rank, c.suit) for c in clone.players[1].hand] == hand_cards
         assert len(clone.stock) == n_stock
 
-    @mock.patch("game_helpers.AI_TURN_ROLLOUTS", 2)
+    @mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
     def test_play_ai_turn_draw_phase(self):
         """play_ai_turn in DRAW phase performs a draw and advances phase."""
         engine = Engine(num_players=4)
@@ -1304,7 +1449,7 @@ class TestAIISMCTS:
         assert len(player.hand) == hand_size_before + 1
         assert engine.turn_phase == TurnPhase.LAY_DOWN
 
-    @mock.patch("game_helpers.AI_TURN_ROLLOUTS", 2)
+    @mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
     def test_play_ai_turn_discard_phase(self):
         """play_ai_turn in DISCARD phase discards a card."""
         engine = Engine(num_players=4)
@@ -1333,7 +1478,7 @@ class TestAIISMCTS:
         winner_team, team_scores = engine.get_winner_message()
         assert len(team_scores) == 2
 
-    @mock.patch("game_helpers.ISMCTS_COUNTERFACTUAL_ROLLOUTS", 2)
+    @mock.patch("game_helpers.AIConfig.ISMCTS_COUNTERFACTUAL_ROLLOUTS", 2)
     def test_get_counterfactual_action_on_human_turn_returns_suggestion(self):
         """When it's the human's turn, get_counterfactual_action
         returns an action and description."""
@@ -1356,9 +1501,10 @@ class TestAIISMCTS:
         assert action is None
         assert desc == ""
 
+    @mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
+    @mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUT_MAX_STEPS", 3)
     def test_play_ai_turn_completes_quickly(self):
-        """IS-MCTS AI turn (abstraction + progressive widening + fast rollout)
-        finishes in under 2s."""
+        """IS-MCTS AI turn with minimal rollouts finishes in under 2s."""
         engine = Engine(num_players=4)
         engine.start_new_game()
         engine.current_player_index = 1
@@ -1370,10 +1516,10 @@ class TestAIISMCTS:
         assert engine.turn_phase == TurnPhase.LAY_DOWN
         assert len(engine.get_current_player().hand) == 12
 
-    @mock.patch("game_helpers.AI_TURN_ROLLOUTS", 2)
-    @mock.patch("game_helpers.AI_TURN_ROLLOUT_MAX_STEPS", 3)
-    @mock.patch("game_helpers.ISMCTS_COUNTERFACTUAL_ROLLOUTS", 8)
-    @mock.patch("game_helpers.COUNTERFACTUAL_ROLLOUT_MAX_STEPS", 6)
+    @mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
+    @mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUT_MAX_STEPS", 3)
+    @mock.patch("game_helpers.AIConfig.ISMCTS_COUNTERFACTUAL_ROLLOUTS", 8)
+    @mock.patch("game_helpers.AIConfig.COUNTERFACTUAL_ROLLOUT_MAX_STEPS", 6)
     def test_counterfactual_suggestion_takes_longer_but_still_reasonable(self):
         """Sugestão do bot (stronger MCTS) with more rollouts completes
         within a reasonable time. With patched rollouts, suggestion does
