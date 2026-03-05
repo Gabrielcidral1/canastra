@@ -1,36 +1,58 @@
 """Streamlit interface for Canastra - Orchestrator."""
 
+import sys
+from pathlib import Path
+
+# When the project is not installed as a package (e.g. Streamlit Community Cloud
+# with package-mode = false), ensure the canastra package can be imported.
+_app_dir = Path(__file__).resolve().parent
+_src = _app_dir / "src"
+if _src.exists() and str(_src) not in sys.path:
+    sys.path.insert(0, str(_src))
+
 import time
 
 import streamlit as st
 
-from card import SUIT_MAP, SUIT_NAME_MAP
-from constants import AppConfig, GameMode, GameRules, GameTypeStr, UIText
-from engine import Engine, TurnPhase
-from game import GameType, can_form_sequence, can_form_triple
-from game_helpers import (
+from canastra.core import (
+    RULES_BODY,
+    AppConfig,
+    Engine,
+    GameMode,
+    GameRules,
+    GameType,
+    GameTypeStr,
+    TurnPhase,
+    UIText,
+    can_form_sequence,
+    can_form_triple,
     detect_game_type,
     get_counterfactual_action,
     organize_hand,
     play_ai_turn,
 )
-from rules_loader import RULES_BODY
-from ui_components import (
+from canastra.core.card import SUIT_MAP, SUIT_NAME_MAP
+from canastra.ui import (
     display_card,
     display_games_area,
     display_player_panel,
     get_app_styles,
     get_card_display_short,
 )
+from canastra.ui import (
+    render_mode_selection as _render_landing,
+)
 
 # Bot difficulty: 1=Fácil, 2=Médio, 3=Difícil. Harder = more MCTS rollouts.
 # delay_sec: pause after AI turn before showing next (0 when hard, turn already long).
 # Kept light so the app stays responsive; Médio was freezing on slower PCs.
 BOT_DIFFICULTY_PRESETS = {
-    1: {"rollouts": 1, "steps": 2, "delay_sec": 1},   # Fácil: very fast
-    2: {"rollouts": 2, "steps": 3, "delay_sec": 1},   # Médio: light
-    3: {"rollouts": 4, "steps": 5, "delay_sec": 0},   # Difícil: stronger
+    1: {"rollouts": 1, "steps": 2, "delay_sec": 1},  # Fácil: very fast
+    2: {"rollouts": 2, "steps": 3, "delay_sec": 1},  # Médio: light
+    3: {"rollouts": 4, "steps": 5, "delay_sec": 0},  # Difícil: stronger
 }
+
+
 # Map sidebar label (from UIText.Sidebar) to preset key 1,2,3
 def _bot_difficulty_level():
     label = st.session_state.get("bot_difficulty", UIText.Sidebar.BOT_DIFFICULTY_MEDIUM)
@@ -66,7 +88,6 @@ def initialize_session():
 
 def render_mode_selection():
     """Delegate to landing page module (mode choice, card examples, rules)."""
-    from landing import render_mode_selection as _render_landing
     _render_landing()
 
 
@@ -76,7 +97,9 @@ def _human_team(engine: Engine) -> int:
 
 
 def render_game_over_message(
-    engine: Engine, current_player, in_sidebar: bool = False,
+    engine: Engine,
+    current_player,
+    in_sidebar: bool = False,
 ):
     """Render winner/tie message for game over (empty stock or canastra)."""
     winner_team, team_scores = engine.get_winner_message()
@@ -86,9 +109,7 @@ def render_game_over_message(
         other_pts = team_scores.get(1 - our_team, 0)
         msg = UIText.game_over_tie(our_pts, other_pts)
     else:
-        winner_name = (
-            UIText.Teams.US if winner_team == our_team else UIText.Teams.THEM
-        )
+        winner_name = UIText.Teams.US if winner_team == our_team else UIText.Teams.THEM
         msg = UIText.game_over_won(winner_name, team_scores[winner_team])
     if in_sidebar:
         st.success(msg)
@@ -448,9 +469,13 @@ def _render_add_to_game_buttons(engine: Engine, current_player, card) -> None:
             base_label = f"{type_str} de {suit_val}"
         else:
             base_label = type_str
-        valid_targets.append((
-            owner, game_index_in_owner, f"{base_label} ({display_pos}º jogo)",
-        ))
+        valid_targets.append(
+            (
+                owner,
+                game_index_in_owner,
+                f"{base_label} ({display_pos}º jogo)",
+            )
+        )
 
     st.markdown(UIText.LayDown.ADD_TO_GAME_HEADING)
     if not valid_targets:

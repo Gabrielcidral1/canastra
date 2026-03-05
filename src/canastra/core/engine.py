@@ -2,8 +2,8 @@
 
 import random
 
-from card import Card, Suit, create_canastra_deck
-from constants import (
+from .card import Card, Suit, create_canastra_deck
+from .constants import (
     DisplayNameTemplates,
     EngineErrors,
     EngineLog,
@@ -13,7 +13,7 @@ from constants import (
     TurnPhase,
     UIText,
 )
-from game import Game
+from .game import Game
 
 
 class Player:
@@ -485,9 +485,7 @@ class Engine:
             has_final_knock = any(len(j.hand) == 0 for j in team_players)
             if has_final_knock:
                 team_points += GameRules.FINAL_KNOCK_BONUS
-                self._log(
-                    EngineLog.TEAM_FINAL_KNOCK_BONUS.format(team=team + 1)
-                )
+                self._log(EngineLog.TEAM_FINAL_KNOCK_BONUS.format(team=team + 1))
 
             for player in team_players:
                 games_points = player.get_games_value()
@@ -503,9 +501,7 @@ class Engine:
 
             if not any(j.has_dead_hand for j in team_players):
                 team_points -= GameRules.DEAD_HAND_PENALTY
-                self._log(
-                    EngineLog.TEAM_NO_DEAD_HAND_PENALTY.format(team=team + 1)
-                )
+                self._log(EngineLog.TEAM_NO_DEAD_HAND_PENALTY.format(team=team + 1))
 
             for player in team_players:
                 player.points = team_points
@@ -525,9 +521,7 @@ class Engine:
             new_p.games = []
             for g in p.games:
                 new_cards = [Card(c.rank, c.suit) for c in g.cards]
-                new_g = Game(
-                    g.game_type, new_cards, g.suit, _skip_validate=True
-                )
+                new_g = Game(g.game_type, new_cards, g.suit, _skip_validate=True)
                 new_p.games.append(new_g)
             new_p.points = p.points
             new_p.has_dead_hand = p.has_dead_hand

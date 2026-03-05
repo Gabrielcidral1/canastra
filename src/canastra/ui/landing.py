@@ -8,10 +8,10 @@ import re
 
 import streamlit as st
 
-from card import Card, Rank, Suit
-from constants import GameMode, UIText
-from rules_loader import RULES_BODY
-from ui_components import card_html_static
+from canastra.core.card import Card, Rank, Suit
+from canastra.core.constants import GameMode, UIText
+from canastra.core.rules_loader import RULES_BODY
+from canastra.ui.ui_components import card_html_static
 
 
 def _bold_to_html(text: str) -> str:
@@ -61,8 +61,7 @@ def _rules_markdown_to_html(md: str) -> str:
 
 def _landing_page_styles() -> str:
     """CSS for the mode selection landing page."""
-    return (
-        """
+    return """
     <style>
     [data-testid="stAppViewContainer"] main .block-container {
         max-width: 100rem; padding-left: 2rem; padding-right: 2rem;
@@ -111,7 +110,6 @@ def _landing_page_styles() -> str:
     }
     </style>
     """
-    )
 
 
 def _render_card_examples():
@@ -144,16 +142,16 @@ def _render_card_examples():
         '<div class="landing-examples">'
         '<div class="landing-examples-row">'
         '<div class="landing-examples-label">Sequência (mesmo naipe)</div>'
-        + "".join(card_html_static(c, w, h) for c in seq_cards) +
-        "</div></div>"
+        + "".join(card_html_static(c, w, h) for c in seq_cards)
+        + "</div></div>"
     )
     st.markdown(row1, unsafe_allow_html=True)
 
     row2 = (
         '<div class="landing-examples-row">'
         '<div class="landing-examples-label">Trinca (mesmo número)</div>'
-        + "".join(card_html_static(c, w, h) for c in tri_cards) +
-        "</div>"
+        + "".join(card_html_static(c, w, h) for c in tri_cards)
+        + "</div>"
     )
     st.markdown(row2, unsafe_allow_html=True)
 
@@ -162,7 +160,9 @@ def _render_card_examples():
         '<div class="landing-examples-label">Canastra (7+ cartas do mesmo naipe)</div>'
         + "".join(
             card_html_static(
-                c, w, h,
+                c,
+                w,
+                h,
                 rotate_deg=270 if i == len(canastra_cards) - 1 else None,
             )
             for i, c in enumerate(canastra_cards)
@@ -190,7 +190,8 @@ def render_mode_selection():
             "Modo",
             options=[GameMode.ONE_VS_ONE, GameMode.DOUBLES],
             format_func=lambda x: (
-                UIText.ModeSelection.ONE_VS_ONE if x == GameMode.ONE_VS_ONE
+                UIText.ModeSelection.ONE_VS_ONE
+                if x == GameMode.ONE_VS_ONE
                 else UIText.ModeSelection.DOUBLES
             ),
             key="mode_radio",

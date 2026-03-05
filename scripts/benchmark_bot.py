@@ -20,13 +20,15 @@ from collections.abc import Callable
 
 from tqdm import tqdm
 
-from card import Card, Rank, Suit
-from constants import AIConfig, GameRules
-from engine import Engine, TurnPhase
-from game_helpers import (
+from canastra.core import (
+    AIConfig,
+    Engine,
+    GameRules,
+    TurnPhase,
     get_counterfactual_action,
     play_ai_turn,
 )
+from canastra.core.card import Card, Rank, Suit
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,7 @@ CHALLENGER_CONFIG = {
 
 def make_bot(config: dict) -> Callable[[Engine], None]:
     """Return a bot function that plays one turn using the given config."""
+
     def play(engine: Engine) -> None:
         play_ai_turn(
             engine,
@@ -58,6 +61,7 @@ def make_bot(config: dict) -> Callable[[Engine], None]:
             discourage_early_triple=config.get("discourage_early_triple", False),
             use_early_heuristic=config.get("use_early_heuristic", False),
         )
+
     return play
 
 
@@ -154,9 +158,7 @@ def run_control_vs_challenger(
             return
         total_points_control += scores.get(control_team, 0)
         total_points_challenger += scores.get(challenger_team, 0)
-        point_diffs.append(
-            scores.get(challenger_team, 0) - scores.get(control_team, 0)
-        )
+        point_diffs.append(scores.get(challenger_team, 0) - scores.get(control_team, 0))
         if winner is None:
             ties += 1
         elif winner == control_team:
@@ -165,9 +167,7 @@ def run_control_vs_challenger(
             challenger_wins += 1
 
     # Control as team 0, challenger as team 1; then swap seats (2*n games total)
-    game_configs = [
-        (seed_base + i, 0, 1) for i in range(n)
-    ] + [
+    game_configs = [(seed_base + i, 0, 1) for i in range(n)] + [
         (seed_base + 1000 + i, 1, 0) for i in range(n)
     ]
     for seed, ctrl_team, chal_team in tqdm(
@@ -188,7 +188,8 @@ def run_control_vs_challenger(
     games_played = len(point_diffs)
     avg_diff = (
         (total_points_challenger - total_points_control) / games_played
-        if games_played else 0
+        if games_played
+        else 0
     )
     point_diff_ci95 = _ci95_mean(point_diffs) if point_diffs else None
 
@@ -325,8 +326,7 @@ def _run_assert_challenger_wins(
         if result.get("ties", 0):
             wins_msg += f", {result['ties']} tied game(s)"
         logger.info(
-            "OK: Challenger is better. Total points: %s vs %s "
-            "(avg diff %+.0f). %s.",
+            "OK: Challenger is better. Total points: %s vs %s (avg diff %+.0f). %s.",
             result["total_points_challenger"],
             result["total_points_control"],
             result["avg_point_diff"],
@@ -431,12 +431,18 @@ def main() -> None:
     logger.info(
         "   Control:   rollouts=%s, rollout_max_steps=%s, "
         "discourage_early_triple=%s, use_early_heuristic=%s",
-        ctrl_r, ctrl_s, ctrl_t, ctrl_h,
+        ctrl_r,
+        ctrl_s,
+        ctrl_t,
+        ctrl_h,
     )
     logger.info(
         "   Challenger: rollouts=%s, rollout_max_steps=%s, "
         "discourage_early_triple=%s, use_early_heuristic=%s",
-        chal_r, chal_s, chal_t, chal_h,
+        chal_r,
+        chal_s,
+        chal_t,
+        chal_h,
     )
     max_turns = getattr(args, "max_turns", 200)
     logger.info(
@@ -490,9 +496,7 @@ def main() -> None:
             )
     else:
         if cmp["avg_point_diff"] > 0:
-            logger.info(
-                "   → Challenger is ahead by points (candidate improvement)."
-            )
+            logger.info("   → Challenger is ahead by points (candidate improvement).")
         elif cmp["avg_point_diff"] < 0:
             logger.info("   → Control is ahead by points (challenger is worse).")
         else:
@@ -503,9 +507,7 @@ def main() -> None:
         "To test an improvement: set CHALLENGER_CONFIG in benchmark_bot.py "
         "and re-run. Challenger should have more wins and/or more total points."
     )
-    logger.info(
-        "Use --skip-blunder to run only control vs challenger."
-    )
+    logger.info("Use --skip-blunder to run only control vs challenger.")
 
 
 if __name__ == "__main__":

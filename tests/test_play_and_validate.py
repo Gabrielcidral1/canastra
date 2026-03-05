@@ -13,10 +13,9 @@ AI tests patch AIConfig to use minimal rollouts so the suite runs in seconds.
 import random
 from unittest import mock
 
-from card import create_canastra_deck
-from engine import Engine, TurnPhase
-from game import Game
-from game_helpers import _apply_action, _get_legal_actions, play_ai_turn
+from canastra.core import Engine, Game, TurnPhase, play_ai_turn
+from canastra.core.card import create_canastra_deck
+from canastra.core.game_helpers import _apply_action, _get_legal_actions
 
 DECK_SIZE = len(create_canastra_deck())
 
@@ -82,8 +81,8 @@ def _play_one_turn_random(engine: Engine, rng: random.Random) -> None:
         _apply_action(engine, action)
 
 
-@mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
-@mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUT_MAX_STEPS", 3)
+@mock.patch("canastra.core.game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
+@mock.patch("canastra.core.game_helpers.AIConfig.AI_TURN_ROLLOUT_MAX_STEPS", 3)
 def test_play_full_game_all_ai_invariants_hold():
     """Run one full game with all players using play_ai_turn;
     validate after every turn. Uses minimal rollouts for speed."""
@@ -98,8 +97,8 @@ def test_play_full_game_all_ai_invariants_hold():
     assert turn > 0
 
 
-@mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
-@mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUT_MAX_STEPS", 3)
+@mock.patch("canastra.core.game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
+@mock.patch("canastra.core.game_helpers.AIConfig.AI_TURN_ROLLOUT_MAX_STEPS", 3)
 def test_play_multiple_games_mixed_bots_invariants_hold():
     """Run several games (AI + random bots), validate after every turn.
     Uses minimal rollouts for speed."""

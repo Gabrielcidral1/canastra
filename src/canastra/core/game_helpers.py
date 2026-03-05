@@ -3,7 +3,7 @@
 import random
 from itertools import combinations
 
-from card import (
+from .card import (
     RANK_ORDER_SEQUENCE,
     SUIT_SYMBOLS,
     Card,
@@ -11,9 +11,9 @@ from card import (
     Suit,
     create_canastra_deck,
 )
-from constants import ActionDescriptions, ActionKind, AIConfig, GameTypeStr
-from engine import Engine, TurnPhase
-from game import can_form_sequence, can_form_triple
+from .constants import ActionDescriptions, ActionKind, AIConfig, GameTypeStr
+from .engine import Engine, TurnPhase
+from .game import can_form_sequence, can_form_triple
 
 
 def _visible_cards_multiset(engine: Engine, observer_index: int) -> list[tuple]:
@@ -82,10 +82,15 @@ def _collect_add_to_game_actions(engine: Engine, player) -> list[tuple]:
         for p in team_players:
             for gi, game in enumerate(p.games):
                 if game.can_add(card):
-                    out.append((
-                        ActionKind.ADD_TO_GAME, engine.players.index(p), gi,
-                        card.rank, card.suit,
-                    ))
+                    out.append(
+                        (
+                            ActionKind.ADD_TO_GAME,
+                            engine.players.index(p),
+                            gi,
+                            card.rank,
+                            card.suit,
+                        )
+                    )
                     break
     return out
 
@@ -155,9 +160,13 @@ def _get_abstract_actions(
         if game_result:
             gt, suit, cards = game_result
             if gt == GameTypeStr.SEQUENCE:
-                actions.append((
-                    ActionKind.LAY_SEQUENCE, suit, [(c.rank, c.suit) for c in cards],
-                ))
+                actions.append(
+                    (
+                        ActionKind.LAY_SEQUENCE,
+                        suit,
+                        [(c.rank, c.suit) for c in cards],
+                    )
+                )
             else:
                 triple_tuples = [(c.rank, c.suit) for c in cards]
                 actions.append((ActionKind.LAY_TRIPLE, triple_tuples))
@@ -212,9 +221,14 @@ def _apply_action(engine: Engine, action: tuple) -> bool:
         card = next((c for c in player.hand if c.rank == rank and c.suit == suit), None)
         if card is None:
             return False
-        return engine.add_to_game(
-            game_idx, card, target_player=engine.players[owner_idx],
-        ) is None
+        return (
+            engine.add_to_game(
+                game_idx,
+                card,
+                target_player=engine.players[owner_idx],
+            )
+            is None
+        )
     if kind == ActionKind.DISCARD:
         _, hand_idx = action
         if hand_idx >= len(player.hand):
@@ -352,10 +366,7 @@ def _discard_duplicate_bonus(engine: Engine, action: tuple) -> float:
     if card.rank in (Rank.JOKER, Rank.TWO):
         return 0.0
     hand = player.hand
-    same_card = sum(
-        1 for c in hand
-        if c.rank == card.rank and c.suit == card.suit
-    )
+    same_card = sum(1 for c in hand if c.rank == card.rank and c.suit == card.suit)
     if same_card >= 2:
         return AIConfig.DISCARD_DUPLICATE_BONUS
     return 0.0
@@ -406,7 +417,8 @@ def _discard_far_or_adjacent_in_suit_bonus(engine: Engine, action: tuple) -> flo
         return 0.0
     hand = player.hand
     same_suit_others = [
-        c for i, c in enumerate(hand)
+        c
+        for i, c in enumerate(hand)
         if i != hand_idx and c.suit == card.suit and c.rank != Rank.JOKER
     ]
     if not same_suit_others:
@@ -461,9 +473,7 @@ def _early_triple_penalty(engine: Engine, action: tuple) -> float:
     if not _is_early_game(engine):
         return 0.0
     card_tuples = action[1]
-    uses_wildcards = any(
-        r == Rank.JOKER or r == Rank.TWO for r, _ in card_tuples
-    )
+    uses_wildcards = any(r == Rank.JOKER or r == Rank.TWO for r, _ in card_tuples)
     if uses_wildcards:
         return AIConfig.EARLY_TRIPLE_WILD_PENALTY
     return AIConfig.EARLY_TRIPLE_NATURAL_PENALTY
@@ -519,7 +529,8 @@ def _fast_rollout(
             our_players = engine.get_team_players(our_team)
             return float(our_players[0].points) if our_players else 0.0
         actions = _get_abstract_actions(
-            engine, rng,
+            engine,
+            rng,
             max_add_to_game=AIConfig.ROLLOUT_ABSTRACT_ADD,
             max_discard=AIConfig.ROLLOUT_ABSTRACT_DISCARD,
         )
@@ -535,7 +546,7 @@ def _ucb(mean: float, n: int, n_total: int, c: float | None = None) -> float:
     if n == 0:
         return float("inf")
     c_val = c if c is not None else AIConfig.UCB_C
-    return mean + c_val * (float(n_total + 1) ** 0.5) / (n ** 0.5)
+    return mean + c_val * (float(n_total + 1) ** 0.5) / (n**0.5)
 
 
 def _is_mcts_choose(
@@ -560,7 +571,8 @@ def _is_mcts_choose(
         return actions[0]
 
     steps = (
-        rollout_max_steps if rollout_max_steps is not None
+        rollout_max_steps
+        if rollout_max_steps is not None
         else AIConfig.ROLLOUT_MAX_STEPS
     )
     scores: list[list[float]] = [[] for _ in range(len(actions))]
@@ -574,8 +586,7 @@ def _is_mcts_choose(
                 for i in range(len(actions))
             ]
             ucb_vals = [
-                _ucb(means[i], len(scores[i]), n_total)
-                for i in range(len(actions))
+                _ucb(means[i], len(scores[i]), n_total) for i in range(len(actions))
             ]
             ai = int(max(range(len(actions)), key=lambda i: ucb_vals[i]))
         action = actions[ai]
@@ -741,7 +752,8 @@ def play_ai_turn(
     rng = random.Random()
     n_rollouts = rollouts if rollouts is not None else AIConfig.AI_TURN_ROLLOUTS
     n_steps = (
-        rollout_max_steps if rollout_max_steps is not None
+        rollout_max_steps
+        if rollout_max_steps is not None
         else AIConfig.AI_TURN_ROLLOUT_MAX_STEPS
     )
     best = _is_mcts_choose(
@@ -774,7 +786,9 @@ def _rank_display_index(rank: Rank) -> int:
 
 
 def _place_joker_in_first_gap(
-    suit_cards: list[Card], ranks: list[float], joker: Card,
+    suit_cards: list[Card],
+    ranks: list[float],
+    joker: Card,
 ) -> bool:
     """Insert joker into first gap in suit_cards. Mutates suit_cards and ranks.
     Returns True if placed."""

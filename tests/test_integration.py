@@ -9,10 +9,19 @@ import unittest.mock as mock
 
 import pytest
 
-from card import Card, Rank, Suit
-from engine import Engine, KnockType, TurnPhase
-from game import Game, GameType, can_form_sequence, can_form_triple
-from game_helpers import (
+from canastra.core import (
+    Engine,
+    Game,
+    GameType,
+    KnockType,
+    TurnPhase,
+    can_form_sequence,
+    can_form_triple,
+    get_counterfactual_action,
+    play_ai_turn,
+)
+from canastra.core.card import Card, Rank, Suit
+from canastra.core.game_helpers import (
     _apply_action,
     _determinize,
     _discard_connector_isolated_bonus,
@@ -23,10 +32,8 @@ from game_helpers import (
     _discard_useful_card_penalty,
     _get_legal_actions,
     _is_early_game,
-    get_counterfactual_action,
-    play_ai_turn,
 )
-from game_helpers import (
+from canastra.core.game_helpers import (
     _early_triple_penalty as _early_trinca_penalty,
 )
 
@@ -319,7 +326,7 @@ class TestLayingDownGames:
 
     def test_sequence_duplicate_ranks_not_allowed(self):
         """Sequence cannot have duplicate ranks (e.g. 6D, 2D, 8D, 8D)."""
-        from game import Game, GameType
+        from canastra.core import Game, GameType
 
         engine = Engine(num_players=4)
         engine.start_new_game()
@@ -512,7 +519,7 @@ class TestAddingToGames:
     def test_add_card_to_sequence_with_wildcard(self):
         """Adding a card that fills the gap after a wildcard (e.g. 5H,2H,7H + 8H)
         must be accepted."""
-        from game import Game, GameType
+        from canastra.core import Game, GameType
 
         engine = Engine(num_players=4)
         engine.start_new_game()
@@ -540,7 +547,7 @@ class TestAddingToGames:
     def test_add_2_of_suit_to_sequence_with_existing_wildcard(self):
         """Adding 2 of the sequence suit (e.g. 2C to a Clubs sequence) is allowed
         as natural even if there is already a wildcard (e.g. 2D)."""
-        from game import Game, GameType
+        from canastra.core import Game, GameType
 
         engine = Engine(num_players=4)
         engine.start_new_game()
@@ -569,7 +576,7 @@ class TestAddingToGames:
     def test_add_duplicate_rank_to_sequence_rejected(self):
         """Adding a card that would duplicate a rank in the sequence (e.g. second
         8D) is rejected."""
-        from game import Game, GameType
+        from canastra.core import Game, GameType
 
         engine = Engine(num_players=4)
         engine.start_new_game()
@@ -1163,13 +1170,13 @@ class TestAIISMCTS:
         engine.discard_pile.append(Card(Rank.FOUR, Suit.CLUBS))
         # discard 4♦, pile top 4♣
         danger_match = _discard_danger(engine, ("discard", 0))
-        danger_safe = _discard_danger(engine, ("discard", 1))   # discard 7♥
+        danger_safe = _discard_danger(engine, ("discard", 1))  # discard 7♥
         assert danger_match >= 0.5 and danger_safe == 0.0
 
     def test_discard_danger_addable_card_high_danger(self):
         """Discarding a card we can add to our team's meld is rated dangerous
         (avoid 5♣ blunder)."""
-        from game import Game, GameType
+        from canastra.core import Game, GameType
 
         engine = Engine(num_players=4)
         engine.start_new_game()
@@ -1298,18 +1305,14 @@ class TestAIISMCTS:
             Card(Rank.NINE, Suit.CLUBS),
             Card(Rank.ACE, Suit.CLUBS),
         ]
-        bonus_a_clubs = _discard_far_or_adjacent_in_suit_bonus(
-            engine, ("discard", 3)
-        )
+        bonus_a_clubs = _discard_far_or_adjacent_in_suit_bonus(engine, ("discard", 3))
         assert bonus_a_clubs >= 14.0
         # J♠, K♠ — K is adjacent to J (distance 1), prefer not to discard
         engine.players[0].hand = [
             Card(Rank.JACK, Suit.SPADES),
             Card(Rank.KING, Suit.SPADES),
         ]
-        bonus_k_spades = _discard_far_or_adjacent_in_suit_bonus(
-            engine, ("discard", 1)
-        )
+        bonus_k_spades = _discard_far_or_adjacent_in_suit_bonus(engine, ("discard", 1))
         assert bonus_k_spades <= -14.0
 
     def test_early_triple_penalty(self):
@@ -1437,7 +1440,7 @@ class TestAIISMCTS:
         assert [(c.rank, c.suit) for c in clone.players[1].hand] == hand_cards
         assert len(clone.stock) == n_stock
 
-    @mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
+    @mock.patch("canastra.core.game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
     def test_play_ai_turn_draw_phase(self):
         """play_ai_turn in DRAW phase performs a draw and advances phase."""
         engine = Engine(num_players=4)
@@ -1449,7 +1452,7 @@ class TestAIISMCTS:
         assert len(player.hand) == hand_size_before + 1
         assert engine.turn_phase == TurnPhase.LAY_DOWN
 
-    @mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
+    @mock.patch("canastra.core.game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
     def test_play_ai_turn_discard_phase(self):
         """play_ai_turn in DISCARD phase discards a card."""
         engine = Engine(num_players=4)
@@ -1478,7 +1481,7 @@ class TestAIISMCTS:
         winner_team, team_scores = engine.get_winner_message()
         assert len(team_scores) == 2
 
-    @mock.patch("game_helpers.AIConfig.ISMCTS_COUNTERFACTUAL_ROLLOUTS", 2)
+    @mock.patch("canastra.core.game_helpers.AIConfig.ISMCTS_COUNTERFACTUAL_ROLLOUTS", 2)
     def test_get_counterfactual_action_on_human_turn_returns_suggestion(self):
         """When it's the human's turn, get_counterfactual_action
         returns an action and description."""
@@ -1501,8 +1504,8 @@ class TestAIISMCTS:
         assert action is None
         assert desc == ""
 
-    @mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
-    @mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUT_MAX_STEPS", 3)
+    @mock.patch("canastra.core.game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
+    @mock.patch("canastra.core.game_helpers.AIConfig.AI_TURN_ROLLOUT_MAX_STEPS", 3)
     def test_play_ai_turn_completes_quickly(self):
         """IS-MCTS AI turn with minimal rollouts finishes in under 2s."""
         engine = Engine(num_players=4)
@@ -1516,10 +1519,13 @@ class TestAIISMCTS:
         assert engine.turn_phase == TurnPhase.LAY_DOWN
         assert len(engine.get_current_player().hand) == 12
 
-    @mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
-    @mock.patch("game_helpers.AIConfig.AI_TURN_ROLLOUT_MAX_STEPS", 3)
-    @mock.patch("game_helpers.AIConfig.ISMCTS_COUNTERFACTUAL_ROLLOUTS", 8)
-    @mock.patch("game_helpers.AIConfig.COUNTERFACTUAL_ROLLOUT_MAX_STEPS", 6)
+    @mock.patch("canastra.core.game_helpers.AIConfig.AI_TURN_ROLLOUTS", 2)
+    @mock.patch("canastra.core.game_helpers.AIConfig.AI_TURN_ROLLOUT_MAX_STEPS", 3)
+    @mock.patch("canastra.core.game_helpers.AIConfig.ISMCTS_COUNTERFACTUAL_ROLLOUTS", 8)
+    @mock.patch(
+        "canastra.core.game_helpers.AIConfig.COUNTERFACTUAL_ROLLOUT_MAX_STEPS",
+        6,
+    )
     def test_counterfactual_suggestion_takes_longer_but_still_reasonable(self):
         """Sugestão do bot (stronger MCTS) with more rollouts completes
         within a reasonable time. With patched rollouts, suggestion does

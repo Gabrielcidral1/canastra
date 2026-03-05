@@ -68,16 +68,16 @@ The project is split into: **data and rules** (card, game), **game state and flo
 
 | Module | Role |
 |--------|------|
-| **card.py** | Card representation (`Card`, `Rank`, `Suit`), deck creation (`create_canastra_deck()`), rank order for sequences. |
-| **game.py** | Meld model and rules: `Game` (sequence or triple), validation, `can_form_sequence` / `can_form_triple`, wildcard rules. |
-| **engine.py** | Game state and flow: `Engine`, `Player`, turn phases (draw → lay down → discard), knock handling, scoring. |
-| **game_helpers.py** | AI and simulation: legal/abstract actions, determinization, MCTS/rollouts, bot suggestion, `detect_game_type`, `find_valid_game`, `organize_hand`. |
-| **ui_components.py** | Streamlit UI: card display, player panels, meld areas, app CSS. |
-| **landing.py** | Landing page: mode selection (1v1 / doubles), rules block, card examples. |
+| **src/canastra/core/card.py** | Card representation (`Card`, `Rank`, `Suit`), deck creation (`create_canastra_deck()`), rank order for sequences. |
+| **src/canastra/core/game.py** | Meld model and rules: `Game` (sequence or triple), validation, `can_form_sequence` / `can_form_triple`, wildcard rules. |
+| **src/canastra/core/engine.py** | Game state and flow: `Engine`, `Player`, turn phases (draw → lay down → discard), knock handling, scoring. |
+| **src/canastra/core/game_helpers.py** | AI and simulation: legal/abstract actions, determinization, MCTS/rollouts, bot suggestion, `detect_game_type`, `find_valid_game`, `organize_hand`. |
+| **src/canastra/ui/ui_components.py** | Streamlit UI: card display, player panels, meld areas, app CSS. |
+| **src/canastra/ui/landing.py** | Landing page: mode selection (1v1 / doubles), rules block, card examples. |
 | **app.py** | Main Streamlit app: session state, layout, phase-specific rendering, wiring to engine and game_helpers. |
-| **constants.py** | Centralized constants: enums, game rules, AI config, UI/engine text. |
-| **rules_loader.py** | Loads rules text from `rules.md`. |
-| **benchmark_bot.py** | Bot benchmarks and comparison (e.g. control vs challenger). |
+| **src/canastra/core/constants.py** | Centralized constants: enums, game rules, AI config, UI/engine text. |
+| **src/canastra/core/rules_loader.py** | Loads rules text from `src/canastra/core/rules.md`. |
+| **scripts/benchmark_bot.py** | Bot benchmarks and comparison (e.g. control vs challenger). |
 
 ### Data flow (simplified)
 
@@ -106,20 +106,24 @@ The Streamlit UI lets you:
 
 ```
 canastra/
-├── app.py               # Main Streamlit app
-├── landing.py           # Landing page (mode selection, rules)
-├── engine.py            # Game state and flow
-├── game.py              # Melds and rules
-├── game_helpers.py       # AI, legal actions, simulation
-├── card.py              # Cards, deck, rank order
-├── ui_components.py     # Streamlit UI building blocks
-├── constants.py         # Enums, game rules, AI config, UI text
-├── rules_loader.py      # Load rules from rules.md
-├── rules.md             # Game rules (Portuguese)
-├── main.py              # Optional entry (runs streamlit run app.py)
-├── benchmark_bot.py     # Bot benchmarks
-├── pyproject.toml       # Project and test config
+├── app.py                  # Main Streamlit app
+├── main.py                 # Optional entry (runs streamlit run app.py)
+├── pyproject.toml          # Project and test config
 ├── README.md
+├── src/canastra/           # Main package
+│   ├── core/               # Game logic
+│   │   ├── card.py         # Cards, deck, rank order
+│   │   ├── constants.py   # Enums, game rules, AI config, UI text
+│   │   ├── engine.py      # Game state and flow
+│   │   ├── game.py        # Melds and rules
+│   │   ├── game_helpers.py # AI, legal actions, simulation
+│   │   ├── rules_loader.py # Load rules from rules.md
+│   │   └── rules.md       # Game rules (Portuguese)
+│   └── ui/                 # Streamlit UI
+│       ├── landing.py      # Landing page (mode selection, rules)
+│       └── ui_components.py # Card display, panels, meld areas, CSS
+├── scripts/
+│   └── benchmark_bot.py   # Bot benchmarks
 └── tests/
     ├── __init__.py
     ├── test_integration.py

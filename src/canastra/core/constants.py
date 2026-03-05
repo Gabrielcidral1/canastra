@@ -400,13 +400,15 @@ class UIText:
     @staticmethod
     def game_over_tie(our_pts: int, other_pts: int) -> str:
         return UIText.GameOver.TIE.format(
-            our_pts=our_pts, other_pts=other_pts,
+            our_pts=our_pts,
+            other_pts=other_pts,
         )
 
     @staticmethod
     def game_over_won(winner_name: str, points: int) -> str:
         return UIText.GameOver.WON.format(
-            winner_name=winner_name, points=points,
+            winner_name=winner_name,
+            points=points,
         )
 
     @staticmethod

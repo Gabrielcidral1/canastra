@@ -1,7 +1,7 @@
 [project]
 name = "canastra"
 version = "0.1.0"
-description = "An AI player for the Canastra (Canasta) card game"
+description = "An AI player for the Canastra card game"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -27,6 +27,14 @@ classifiers = [
 [project.scripts]
 canastra = "main:main"
 
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/canastra/**/*.py",
+    "src/canastra/core/rules.md",
+    "README.md",
+]
+exclude = ["__pycache__", "*.pyc"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -46,26 +54,20 @@ dev = [
 [tool.ruff]
 target-version = "py310"
 line-length = 88
-src = ["."]
+src = ["src", "tests", "app.py", "main.py", "scripts"]
 exclude = ["__pycache__", ".git"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
 ignore = []
 
+# app.py sets sys.path before importing canastra for Streamlit Cloud (package not installed)
+[tool.ruff.lint.per-file-ignores]
+"app.py" = ["E402"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 
 [tool.hatch.build.targets.wheel]
-packages = ["."]
-
-[tool.hatch.build.targets.sdist]
-include = [
-    "*.py",
-    "README.md",
-]
-exclude = [
-    "__pycache__",
-    "*.pyc",
-]
+packages = ["src/canastra"]

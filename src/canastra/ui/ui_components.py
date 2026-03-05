@@ -2,9 +2,9 @@
 
 import streamlit as st
 
-from card import RANK_ORDER_SEQUENCE, SUIT_SYMBOLS, Card, Rank, Suit
-from engine import Engine, TurnPhase
-from game import GameType, counts_as_wildcard_in_sequence, is_wildcard
+from canastra.core.card import RANK_ORDER_SEQUENCE, SUIT_SYMBOLS, Card, Rank, Suit
+from canastra.core.engine import Engine, TurnPhase
+from canastra.core.game import GameType, counts_as_wildcard_in_sequence, is_wildcard
 
 
 def get_card_color(card: Card) -> str:
@@ -54,13 +54,13 @@ def card_html_static(
     font_suit = 18 if width_px <= 44 else 24
     inner = (
         f'<div style="display:inline-block;width:{width_px}px;height:{height_px}px;'
-        f'border:2px solid #333;border-radius:6px;background:white;'
-        f'box-shadow:0 2px 3px rgba(0,0,0,0.2);margin:3px;padding:3px;'
+        f"border:2px solid #333;border-radius:6px;background:white;"
+        f"box-shadow:0 2px 3px rgba(0,0,0,0.2);margin:3px;padding:3px;"
         f'text-align:center;font-weight:bold;vertical-align:middle">'
         f'<div style="color:{color};font-size:{font_rank}px;line-height:1.2">'
-        f'{rank}</div>'
+        f"{rank}</div>"
         f'<div style="color:{color};font-size:{font_suit}px;line-height:1.2">'
-        f'{symbol}</div>'
+        f"{symbol}</div>"
         f"</div>"
     )
     if rotate_deg is not None:
@@ -233,9 +233,7 @@ def _sort_natural_cards_for_sequence(natural_cards: list, suit: Suit):
     natural_cards = list(natural_cards)
     natural_cards.sort(
         key=lambda c: (
-            RANK_ORDER_SEQUENCE.index(c.rank)
-            if c.rank in RANK_ORDER_SEQUENCE
-            else 99
+            RANK_ORDER_SEQUENCE.index(c.rank) if c.rank in RANK_ORDER_SEQUENCE else 99
         ),
     )
     return natural_cards
@@ -248,8 +246,7 @@ def _place_wildcard_in_sequence_gap(natural_cards: list, wildcard: Card) -> list
         return natural_cards + [wildcard]
     rank_order = RANK_ORDER_SEQUENCE
     indices = [
-        rank_order.index(c.rank) if c.rank in rank_order else 99
-        for c in natural_cards
+        rank_order.index(c.rank) if c.rank in rank_order else 99 for c in natural_cards
     ]
     # Prefer gap between consecutive naturals (e.g. 3,5 → 3,wild,5)
     for i in range(len(indices) - 1):
@@ -274,8 +271,7 @@ def sort_game_cards(game):
 
     wildcards = [c for c in game.cards if counts_as_wildcard_in_sequence(c, game.suit)]
     natural_cards = [
-        c for c in game.cards
-        if not counts_as_wildcard_in_sequence(c, game.suit)
+        c for c in game.cards if not counts_as_wildcard_in_sequence(c, game.suit)
     ]
     natural_cards = _sort_natural_cards_for_sequence(natural_cards, game.suit)
     # Display A-2-3 as A, 2, 3 (Ace as 1), not 2, 3, A
@@ -285,7 +281,8 @@ def sort_game_cards(game):
     )
     if ranks_sorted == [Rank.TWO, Rank.THREE, Rank.ACE]:
         natural_cards = [
-            c for r in [Rank.ACE, Rank.TWO, Rank.THREE]
+            c
+            for r in [Rank.ACE, Rank.TWO, Rank.THREE]
             for c in natural_cards
             if c.rank == r
         ]
@@ -294,7 +291,8 @@ def sort_game_cards(game):
         return _place_wildcard_in_sequence_gap(natural_cards, wildcards[0])
 
     twos_of_suit = [
-        c for c in natural_cards
+        c
+        for c in natural_cards
         if c.rank == Rank.TWO and game.suit and c.suit == game.suit
     ]
     rest = [c for c in natural_cards if c not in twos_of_suit]
@@ -313,7 +311,8 @@ def sort_game_cards(game):
                 )
                 if result_ranks == [Rank.TWO, Rank.THREE, Rank.ACE]:
                     result = [
-                        c for r in [Rank.ACE, Rank.TWO, Rank.THREE]
+                        c
+                        for r in [Rank.ACE, Rank.TWO, Rank.THREE]
                         for c in result
                         if c.rank == r
                     ]
@@ -325,7 +324,8 @@ def sort_game_cards(game):
         )
         if result_ranks == [Rank.TWO, Rank.THREE, Rank.ACE]:
             result = [
-                c for r in [Rank.ACE, Rank.TWO, Rank.THREE]
+                c
+                for r in [Rank.ACE, Rank.TWO, Rank.THREE]
                 for c in result
                 if c.rank == r
             ]

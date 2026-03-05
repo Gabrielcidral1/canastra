@@ -1,6 +1,6 @@
 """Canastra game rules."""
 
-from card import (
+from .card import (
     JOKER_DISPLAY_NAME_PT,
     RANK_ORDER_SEQUENCE,
     SUIT_NAMES_PT,
@@ -8,7 +8,7 @@ from card import (
     Rank,
     Suit,
 )
-from constants import GameRules, GameType, GameValidation
+from .constants import GameRules, GameType, GameValidation
 
 
 def is_wildcard(card: Card) -> bool:
@@ -213,9 +213,7 @@ class Game:
         if not self.is_canastra:
             return False
         if self.game_type == GameType.SEQUENCE and self.suit:
-            return any(
-                counts_as_wildcard_in_sequence(c, self.suit) for c in self.cards
-            )
+            return any(counts_as_wildcard_in_sequence(c, self.suit) for c in self.cards)
         return any(is_wildcard(c) for c in self.cards)
 
     @property
@@ -289,7 +287,9 @@ class Game:
         """Add a card to the game."""
         if not self.can_add(card):
             raise ValueError(
-                GameValidation.CANNOT_ADD_CARD_TO_GAME.format(card=card_display_pt(card))
+                GameValidation.CANNOT_ADD_CARD_TO_GAME.format(
+                    card=card_display_pt(card)
+                )
             )
         self.cards.append(card)
         try:
